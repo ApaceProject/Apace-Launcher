@@ -55,6 +55,12 @@ jobs:
         id: sha
         run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Apace-Dev-linux-arm64
+          path: Apace-Dev-linux-arm64.zip
+
       - name: Publish dev-build release
         uses: softprops/action-gh-release@v2
         with:
