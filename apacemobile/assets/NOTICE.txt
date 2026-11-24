@@ -1,0 +1,44 @@
+APACE MOBILE — NOTICE / LICENSES
+================================
+
+Ten pakiet zawiera i dystrybuuje następujące komponenty:
+
+1) Apace (serwer, pobierany w trakcie instalacji z GitHub Releases)
+   https://github.com/KotPasztet/Apace
+   Licencja: MIT License, Copyright (c) 2026 Bitcoder
+   Pełny tekst: https://github.com/KotPasztet/Apace/blob/main/LICENSE
+   Uwaga: Apace sam w sobie zawiera komponenty pochodne (Fabric Server,
+   Minecraft EULA dotyczy gry — serwer nie jest tu dystrybuowany w APK).
+
+2) PRoot (binarka ARM64 + loader, osadzone w assets APK)
+   Źródło: pakiet „proot" z repozytorium termux-packages
+   https://github.com/termux/termux-packages (fork proot-me/proot)
+   Upstream: https://github.com/proot-me/proot
+   Licencja: GPL-2.0-or-later
+   Pełny tekst: https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt
+   Oferta źródeł (GPL §3): źródła pakietu termux dostępne publicznie pod
+   powyższym adresem (build recipe + patche); binarka skompilowana z nich.
+
+3) libtalloc.so.2 (biblioteka dla PRoot, osadzona w assets APK)
+   Źródło: pakiet „libtalloc" z termux-packages
+   Licencja: LGPL-3.0-or-later
+   Pełny tekst: https://www.gnu.org/licenses/lgpl-3.0.txt
+
+4) libandroid-shmem.so (biblioteka dla PRoot, osadzona w assets APK)
+   Źródło: pakiet „libandroid-shmem" z termux-packages
+   Licencja: Apache-2.0 (zob. copyright w pakiecie)
+
+5) .NET ASP.NET Core Runtime 10.0.15 linux-arm64 (pobierany w instalacji)
+   https://dotnet.microsoft.com — Licencja: MIT (+ biblioteki trzecich stron
+   zgodnie z dokumentacją .NET)
+
+6) Ubuntu Base rootfs 24.04.5 arm64 (pobierany w instalacji)
+   https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/
+   Licencje: mix (głównie GPL-2.0/GPL-3.0/LGPL) — teksty w rootfs
+   /usr/share/doc/*/copyright
+
+7) Java (OpenJDK 17 JRE) — instalowany przez apt w rootfs
+   GPLv2 with Classpath Exception
+   https://openjdk.java.net/legal/gplv2+ce.html
+
+Apace Mobile (kod aplikacji) dostarczany jest na licencji MIT.

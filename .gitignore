@@ -1,0 +1,4 @@
+apacemobile/build/
+*.apk
+*.idsig
+.DS_Store
