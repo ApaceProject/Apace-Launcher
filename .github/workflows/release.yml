@@ -1,0 +1,67 @@
+name: Release APK
+
+# Manual only — never runs on push or schedule.
+# Builds the APK and attaches it to a GitHub Release (direct .apk download).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.1.0)'
+        required: true
+      prerelease:
+        description: 'Mark as prerelease (true/false)'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK (platform-28, build-tools 33.0.2)
+        run: |
+          set -e
+          mkdir -p "$HOME/android-sdk/cmdline-tools"
+          curl -sSLo tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q tools.zip -d "$HOME/android-sdk/cmdline-tools"
+          mv "$HOME/android-sdk/cmdline-tools/cmdline-tools" "$HOME/android-sdk/cmdline-tools/latest"
+          yes | "$HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$HOME/android-sdk" "platforms;android-28" "build-tools;33.0.2" > /dev/null
+
+      - name: Verify Android SDK
+        run: |
+          set -e
+          ls "$HOME/android-sdk/build-tools/33.0.2/aapt"
+          ls "$HOME/android-sdk/platforms/android-28/android.jar"
+
+      - name: Build APK
+        run: |
+          set -e
+          export SDK="$HOME/android-sdk"
+          export PROJ="$GITHUB_WORKSPACE/apacemobile"
+          bash scripts/build_apk.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ApaceLauncher
+          path: apacemobile/build/ApaceLauncher.apk
+
+      - name: Create release with APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: Apace Launcher ${{ inputs.tag }}
+          prerelease: ${{ inputs.prerelease == 'true' }}
+          make_latest: ${{ inputs.prerelease == 'true' && 'false' || 'true' }}
+          files: apacemobile/build/ApaceLauncher.apk

@@ -6,9 +6,6 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -44,30 +41,8 @@ jobs:
           export PROJ="$GITHUB_WORKSPACE/apacemobile"
           bash scripts/build_apk.sh
 
-      - name: Upload artifact (zip-wrapped APK)
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ApaceLauncher-apk
+          name: ApaceLauncher
           path: apacemobile/build/ApaceLauncher.apk
-
-      # Every main build replaces the rolling "latest" prerelease with a fresh,
-      # directly downloadable ApaceLauncher.apk (GitHub zips Actions artifacts,
-      # so the release asset is the real .apk download).
-      - name: Publish APK to rolling "latest" release (main builds)
-        if: github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: Apace Launcher — latest build (main)
-          prerelease: true
-          make_latest: 'false'
-          files: apacemobile/build/ApaceLauncher.apk
-
-      - name: Publish APK release (tag builds)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: Apace Launcher ${{ github.ref_name }}
-          make_latest: 'true'
-          files: apacemobile/build/ApaceLauncher.apk
