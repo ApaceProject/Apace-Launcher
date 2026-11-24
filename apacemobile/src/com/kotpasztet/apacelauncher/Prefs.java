@@ -55,6 +55,16 @@ public final class Prefs {
     public boolean autoStart() { return sp.getBoolean("auto_start", false); }
     public void autoStart(boolean v) { sp.edit().putBoolean("auto_start", v).apply(); }
 
+    /**
+     * Auto-close apki: gdy serwer zatrzyma się automatycznie po 5 min bezczynności
+     * (idle auto-stop, „battery saving”), apka sama się zamyka (finish + usunięcie
+     * z Recents) i zatrzymuje serwis — proces znika z pamięci. Ręczne zatrzymanie
+     * serwera NIGDY nie zamyka apki. Domyślnie włączone (zgłoszenie użytkownika:
+     * „auto close apki mobilnej nie działa”).
+     */
+    public boolean autoCloseApp() { return sp.getBoolean("auto_close_app", true); }
+    public void autoCloseApp(boolean v) { sp.edit().putBoolean("auto_close_app", v).apply(); }
+
     /** URL manifestu aktualizacji samego APK {version,url} (opcjonalny). */
     public String appUpdateUrl() { return sp.getString("app_update_url", ""); }
     public void appUpdateUrl(String v) { sp.edit().putString("app_update_url", v).apply(); }

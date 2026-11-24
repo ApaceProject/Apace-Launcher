@@ -14,10 +14,14 @@ import java.io.OutputStream;
 /**
  * Etap 3 specyfikacji: instalator Apace wewnątrz aplikacji.
  * Kolejne etapy (zgodnie z tabelą ze specyfikacji):
- *  1. ARM64  2. miejsce na dysku  3. PRoot (assets)  4. Ubuntu ARM64
- *  5. rozpakowanie  6. biblioteki systemowe  7. Java 17
- *  8. .NET 10 (ASP.NET Core Runtime — audyt: release jest framework-dependent!)
- *  9. pliki Apace (GitHub Releases)  10. konfiguracja + smoke test.
+ *  1. ARM64  2. miejsce na dysku  3. PRoot (assets)
+ *  4–8. Środowisko: kanał Dev = pełny filesystem obrazu ghcr.io/kotpasztet/apace:dev
+ *       (Ubuntu 24.04 + Java 17 + .NET 10 + aapt2/zipalign + android-framework,
+ *       warstwy systemowe rozpakowane do rootfs — jak w dockerze); kanał Main =
+ *       Ubuntu ARM64 + apt (z aapt/zipalign jak install-termux.sh) + Java 17
+ *       + .NET 10 (ASP.NET Core Runtime — audyt: release jest framework-dependent!)
+ *  9. pliki Apace (Main: GitHub Releases; Dev: warstwy /app obrazu)
+ *  10. konfiguracja + smoke test.
  */
 public final class InstallerEngine {
 
@@ -105,83 +109,137 @@ public final class InstallerEngine {
         copyAssetExec("proot/libandroid-shmem.so", new File(paths.prootDir, "libandroid-shmem.so"));
         cb.detail("PRoot ready: " + paths.prootBin().getAbsolutePath());
 
-        // ── 4. Ubuntu ARM64 ────────────────────────────────────────────────
-        stage(4, "Downloading Ubuntu ARM64 (~50 MB)");
-        File ubuntuTar = new File(paths.cache, "ubuntu-base-arm64.tar.gz");
-        String sha = Downloader.download(UBUNTU_URL, ubuntuTar, new Downloader.Progress() {
-            public void onProgress(long d, long t) {
-                cb.percent(t > 0 ? (float) d / t : 0f);
-            }
-        });
-        cb.detail("Ubuntu downloaded, SHA-256: " + sha.substring(0, 16) + "…");
-        checkCancel();
-
-        // ── 5. Rozpakowanie środowiska ─────────────────────────────────────
-        stage(5, "Extracting the Ubuntu rootfs");
-        Paths.rmRf(paths.ubuntu);
-        Paths.mkdirs(paths.ubuntu);
-        TarExtractor.extractTarGz(ubuntuTar, paths.ubuntu, new TarExtractor.Progress() {
-            public void onEntry(String name, long soFar) {
-                cb.percent(0.9f); // rootfs rozpakowuje się „wszystko albo nic”
-            }
-        });
-        ubuntuTar.delete();
-        cb.detail("Rootfs: " + paths.ubuntu.getAbsolutePath());
-        provisionBaseFiles();
-
-        // ── 6. Biblioteki systemowe ────────────────────────────────────────
-        stage(6, "Installing system libraries (apt)");
-        PRoot.Result r1 = PRoot.run(PRoot.shellCommand(paths,
-                "apt-get update -qq && apt-get install -y -qq --no-install-recommends " +
-                        "ca-certificates curl unzip libicu74 libstdc++6 && echo APT_OK"),
-                paths, sink());
-        if (!r1.ok() || !r1.out.toString().contains("APT_OK")) {
-            throw new Exception("apt-get failed:\n" + r1.tail(15));
-        }
-
-        // ── 7. Java 17 ─────────────────────────────────────────────────────
-        stage(7, "Installing Java 17 (openjdk-17-jre-headless)");
-        PRoot.Result r2 = PRoot.run(PRoot.shellCommand(paths,
-                "apt-get install -y -qq --no-install-recommends openjdk-17-jre-headless " +
-                        "|| apt-get install -y -qq --no-install-recommends openjdk-21-jre-headless; " +
-                        "java -version 2>&1 | head -1"),
-                paths, sink());
-        if (!r2.ok()) {
-            throw new Exception("Java installation failed:\n" + r2.tail(15));
-        }
-        cb.detail(r2.tail(2).trim());
-
-        // ── 8. .NET 10 (ASP.NET Core Runtime) ──────────────────────────────
-        stage(8, "Downloading .NET 10 ASP.NET Core Runtime (~100 MB)");
-        installDotnet();
-
-        // ── 9. Pliki Apace (Stable = GitHub Releases, Dev = obraz ghcr.io:dev) ─
+        // ── 4. Środowisko: Dev = obraz ghcr.io (pełny filesystem obrazu),
+        //       Main = ubuntu-base + apt + Java + .NET (bez zmian) ───────────
         String channel = prefs.channel();
-        String tag; String assetName; String assetUrl; String expectedSha = null;
+        String tag = null; String assetName = null; String assetUrl = null;
+        String revision = null; String rootfsKey = null;
         if ("dev".equals(channel)) {
-            stage(9, "Downloading Apace (Dev channel — ghcr.io/kotpasztet/apace:dev)");
-            GitHubApi.DevBuild dev = GitHubApi.latestDevBuild();
-            cb.detail("ghcr.io/kotpasztet/apace:dev @ " + dev.version);
-            File layer = new File(paths.cache, "apace-dev-app.tgz");
-            Downloader.download(GitHubApi.ghcrBlobUrl(dev.layerDigest), layer,
-                    new Downloader.Progress() {
-                        public void onProgress(long d, long t) {
-                            cb.percent(t > 0 ? (float) d / t : 0f);
-                        }
-                    }, GitHubApi.ghcrToken());
-            checkCancel();
-            stage(9, "Extracting Apace (app layer)");
-            Paths.mkdirs(paths.current);
-            TarExtractor.extractTarGz(layer, paths.current, "app/", new TarExtractor.Progress() {
-                public void onEntry(String name, long soFar) { cb.percent(0.9f); }
+            // Dev: instalujemy SYSTEMOWĄ część obrazu ghcr.io/kotpasztet/apace:dev
+            // jako rootfs (Ubuntu 24.04 + Java 17 + .NET 10 + aapt2/zipalign +
+            // android-framework + PowerShell — dokładnie to, co ma obraz dockera)
+            // oraz APLIKACYJNĄ część („/app”) jako pliki programu Apace.
+            GitHubApi.DevBuild dev;
+            stage(4, "Resolving ghcr.io/kotpasztet/apace:dev");
+            try {
+                dev = GitHubApi.latestDevBuild();
+            } catch (Exception e) {
+                throw new Exception("ghcr.io/kotpasztet/apace:dev: " + e.getMessage(), e);
+            }
+            cb.detail("image commit " + dev.version
+                    + (dev.revision != null ? " (" + dev.revision + ")" : "")
+                    + (dev.created != null && dev.created.length() >= 16
+                        ? ", built " + dev.created.substring(0, 16).replace('T', ' ') + " UTC" : ""));
+            stage(4, "Downloading the dev image ("
+                    + ((dev.systemSize + dev.appSize) >> 20) + " MB, layers cached for updates)");
+            DevImage.downloadLayers(dev, paths, new DevImage.Progress() {
+                public void percent(float p) { cb.percent(p); }
+                public void note(String line) { cb.detail(line); }
             });
-            layer.delete();
+            checkCancel();
+
+            stage(5, "Extracting the image rootfs (Ubuntu + Java 17 + .NET 10 + tools)");
+            Paths.rmRf(paths.ubuntu);
+            Paths.mkdirs(paths.ubuntu);
+            DevImage.extractRootfs(dev, paths, paths.ubuntu, new DevImage.Progress() {
+                public void percent(float p) { cb.percent(p); }
+                public void note(String line) { cb.detail(line); }
+            });
+            provisionBaseFiles(paths.ubuntu);
+            cb.detail("rootfs: image filesystem (aapt2 + zipalign + android-framework included)");
+            checkCancel();
+
+            stage(6, "System libraries — included in the dev image");
+            cb.detail("base distro + ca-certificates + icu + openjdk-17-jre baked in the image layers");
+            stage(7, "Java 17 — included in the dev image (openjdk-17-jre)");
+            cb.detail("java: " + new File(paths.ubuntu, "usr/bin/java").getAbsolutePath());
+            stage(8, ".NET 10 — included in the dev image (/usr/share/dotnet, aspnet:10.0 base)");
+            cb.detail("dotnet: " + new File(paths.ubuntu, "usr/bin/dotnet").getAbsolutePath());
+
+            stage(9, "Extracting Apace (app layers of the dev image)");
+            Paths.mkdirs(paths.current);
+            DevImage.extractApp(dev, paths, paths.current, new DevImage.Progress() {
+                public void percent(float p) { cb.percent(p); }
+                public void note(String line) { cb.detail(line); }
+            });
             tag = dev.version;
             assetName = "ghcr.io/kotpasztet/apace:dev";
-            assetUrl = GitHubApi.ghcrBlobUrl(dev.layerDigest);
+            assetUrl = "ghcr-image:" + dev.appKey;
+            revision = dev.revision;
+            rootfsKey = dev.systemKey;
         } else {
+            stage(4, "Downloading Ubuntu ARM64 (~50 MB)");
+            File ubuntuTar = new File(paths.cache, "ubuntu-base-arm64.tar.gz");
+            String sha = Downloader.download(UBUNTU_URL, ubuntuTar, new Downloader.Progress() {
+                public void onProgress(long d, long t) {
+                    cb.percent(t > 0 ? (float) d / t : 0f);
+                }
+            });
+            cb.detail("Ubuntu downloaded, SHA-256: " + sha.substring(0, 16) + "…");
+            checkCancel();
+
+            // ── 5. Rozpakowanie środowiska ─────────────────────────────────────
+            stage(5, "Extracting the Ubuntu rootfs");
+            Paths.rmRf(paths.ubuntu);
+            Paths.mkdirs(paths.ubuntu);
+            TarExtractor.extractTarGz(ubuntuTar, paths.ubuntu, new TarExtractor.Progress() {
+                public void onEntry(String name, long soFar) {
+                    cb.percent(0.9f); // rootfs rozpakowuje się „wszystko albo nic”
+                }
+            });
+            ubuntuTar.delete();
+            cb.detail("Rootfs: " + paths.ubuntu.getAbsolutePath());
+            provisionBaseFiles(paths.ubuntu);
+
+            // ── 6. Biblioteki systemowe ────────────────────────────────────────
+            stage(6, "Installing system libraries (apt)");
+            PRoot.Result r1 = PRoot.run(PRoot.shellCommand(paths,
+                    "apt-get update -qq && apt-get install -y -qq --no-install-recommends " +
+                            "ca-certificates curl unzip libicu74 libstdc++6 && echo APT_OK"),
+                    paths, sink());
+            if (!r1.ok() || !r1.out.toString().contains("APT_OK")) {
+                throw new Exception("apt-get failed:\n" + r1.tail(15));
+            }
+            // aapt (+aapt2) i zipalign dla patchera w panelu — tak jak install-termux.sh
+            // (fallback patchera, gdy aapt2 z apktool pada SIGILL na starszych ARM).
+            // Niefatalne: ich brak nie blokuje instalacji kanału Main.
+            PRoot.Result r1b = PRoot.run(PRoot.shellCommand(paths,
+                    "apt-get install -y -qq --no-install-recommends aapt zipalign " +
+                            "&& test -x /usr/bin/aapt2 && echo AAPT_OK || echo AAPT_OPTIONAL_MISSING"),
+                    paths, sink());
+            if (r1b.out.toString().contains("AAPT_OK")) {
+                cb.detail("patcher tools: /usr/bin/aapt2 + /usr/bin/zipalign installed");
+            } else {
+                cb.detail("NOTE: aapt/zipalign not installed (" + r1b.tail(3).trim()
+                        + ") — the panel patcher will use the apktool-bundled aapt2");
+            }
+
+            // ── 7. Java 17 ─────────────────────────────────────────────────────
+            stage(7, "Installing Java 17 (openjdk-17-jre-headless)");
+            PRoot.Result r2 = PRoot.run(PRoot.shellCommand(paths,
+                    "apt-get install -y -qq --no-install-recommends openjdk-17-jre-headless " +
+                            "|| apt-get install -y -qq --no-install-recommends openjdk-21-jre-headless; " +
+                            "java -version 2>&1 | head -1"),
+                    paths, sink());
+            if (!r2.ok()) {
+                throw new Exception("Java installation failed:\n" + r2.tail(15));
+            }
+            cb.detail(r2.tail(2).trim());
+
+            // ── 8. .NET 10 (ASP.NET Core Runtime) ──────────────────────────────
+            stage(8, "Downloading .NET 10 ASP.NET Core Runtime (~100 MB)");
+            installDotnet();
+        }
+
+        // ── 9. Pliki Apace — Dev rozpakował już warstwy /app powyżej ────────
+        if (!"dev".equals(channel)) {
             stage(9, "Downloading Apace (Main channel — GitHub Releases)");
-            GitHubApi.Release rel = GitHubApi.latestRelease();
+            GitHubApi.Release rel;
+            try {
+                rel = GitHubApi.latestRelease();
+            } catch (Exception e) {
+                throw new Exception("GitHub Releases: " + e.getMessage(), e);
+            }
             GitHubApi.Asset asset = GitHubApi.pickArm64Asset(rel);
             if (asset == null) {
                 throw new Exception("No arm64 asset in release " + rel.tag);
@@ -196,11 +254,8 @@ public final class InstallerEngine {
                     cb.percent(t > 0 ? (float) d / t : 0f);
                 }
             });
-            if (expectedSha != null && expectedSha.length() == 64
-                    && !gotSha.equalsIgnoreCase(expectedSha)) {
-                zip.delete();
-                throw new Exception("SHA-256 mismatch:\nexpected " + expectedSha + "\ngot      " + gotSha);
-            }
+            cb.detail("Package SHA-256: " + gotSha.substring(0, 16)
+                    + "… (compare with the release page)");
             checkCancel();
             stage(9, "Extracting Apace");
             Paths.mkdirs(paths.current);
@@ -212,9 +267,9 @@ public final class InstallerEngine {
 
         // ── 10. Konfiguracja + smoke test ──────────────────────────────────
         stage(10, "Configuration and smoke test");
-        finalizeInstall(tag, assetName, channel);
+        finalizeInstall(tag, assetName, channel, revision, rootfsKey);
         PRoot.Result r3 = PRoot.run(PRoot.shellCommand(paths,
-                "java -version 2>&1 | head -1; /opt/dotnet/dotnet --list-runtimes 2>/dev/null | head -2; echo SMOKE_OK"),
+                "java -version 2>&1 | head -1; dotnet --list-runtimes 2>/dev/null | head -2 || true; echo SMOKE_OK"),
                 paths, sink());
         if (!r3.out.toString().contains("SMOKE_OK")) {
             throw new Exception("Smoke test failed:\n" + r3.tail(15));
@@ -254,17 +309,29 @@ public final class InstallerEngine {
     }
 
     /** resolv.conf + hosts (Android nie ma resolv.conf pod bindem). */
-    private void provisionBaseFiles() throws Exception {
-        writeText(new File(paths.ubuntu, "etc/resolv.conf"),
+    static void provisionBaseFiles(File ubuntuRoot) throws Exception {
+        writeText(new File(ubuntuRoot, "etc/resolv.conf"),
                 "nameserver 8.8.8.8\nnameserver 1.1.1.1\n");
-        writeText(new File(paths.ubuntu, "etc/hosts"),
+        writeText(new File(ubuntuRoot, "etc/hosts"),
                 "127.0.0.1 localhost\n::1 localhost\n");
-        new File(paths.ubuntu, "root").mkdirs();
-        new File(paths.ubuntu, "tmp").mkdirs();
+        new File(ubuntuRoot, "root").mkdirs();
+        new File(ubuntuRoot, "tmp").mkdirs();
     }
 
-    void finalizeInstall(String tag, String asset, String channel) throws Exception {
-        // run-inside.sh — wariant install-termux.sh + DOTNET_ROOT (audyt: bez tego Launcher nie wystartuje)
+    /**
+     * Konfiguracja końcowa (instalacja i aktualizacja): run-inside.sh,
+     * config.json, katalogi danych, chmody i marker wersji.
+     *
+     * @param revision pełny SHA commita obrazu dev (APACE_COMMIT) — null dla Main
+     * @param rootfsKey łańcuch digestów warstw systemowych obrazu dev, z których
+     *                  zbudowany jest rootfs — pozwala aktualizacji dev pominąć
+     *                  przebudowę rootfs, gdy warstwy systemowe się nie zmieniły
+     *                  (null = rootfs spoza obrazu dev → przy najbliższej
+     *                  aktualizacji dev zostanie przebudowany)
+     */
+    void finalizeInstall(String tag, String asset, String channel,
+                         String revision, String rootfsKey) throws Exception {
+        // run-inside.sh — wariant install-termux.sh; DOTNET_ROOT zależny od rootfs
         String runInside = "#!/bin/bash\n" +
                 "set -e\n" +
                 "APACE_DIR=\"$(cd \"$(dirname \"$(readlink -f \"$0\")\")\" && pwd)\"\n" +
@@ -274,8 +341,20 @@ public final class InstallerEngine {
                 "export COMPlus_gcConcurrent=1\n" +
                 "export DOTNET_GCHeapHardLimit=\"${APACE_GC_HARD_LIMIT:-536870912}\"\n" +
                 "export DOTNET_CLI_TELEMETRY_OPTOUT=1\n" +
-                "export DOTNET_ROOT=/opt/dotnet\n" +
-                "export PATH=\"/opt/dotnet:$PATH\"\n" +
+                "# .NET: dev-image rootfs ma /usr/share/dotnet (+/usr/bin/dotnet),\n" +
+                "# Main-channel rootfs — /opt/dotnet\n" +
+                "if [ -d /usr/share/dotnet ]; then\n" +
+                "    export DOTNET_ROOT=/usr/share/dotnet\n" +
+                "elif [ -d /opt/dotnet ]; then\n" +
+                "    export DOTNET_ROOT=/opt/dotnet\n" +
+                "fi\n" +
+                "export PATH=\"${DOTNET_ROOT:-/opt/dotnet}:$PATH\"\n" +
+                "# narzędzia patchera z obrazu dev (Dockerfile ENV) — tylko gdy istnieją\n" +
+                "if [ -x /usr/local/bin/aapt2 ]; then export AAPT2_PATH=/usr/local/bin/aapt2; fi\n" +
+                "if [ -x /usr/bin/zipalign ]; then export ZIPALIGN_PATH=/usr/bin/zipalign; fi\n" +
+                "if [ -d /opt/android-framework ]; then export APKTOOL_FRAMEWORK_DIR=/opt/android-framework; fi\n" +
+                (revision != null && revision.matches("[0-9a-fA-F]{8,40}")
+                        ? "export APACE_COMMIT=" + revision + "\n" : "") +
                 "if command -v java >/dev/null 2>&1; then\n" +
                 "    JAVA_BIN=\"$(readlink -f \"$(command -v java)\")\"\n" +
                 "    export JAVA_HOME=\"$(dirname \"$(dirname \"$JAVA_BIN\")\")\"\n" +
@@ -310,15 +389,28 @@ public final class InstallerEngine {
         o.put("asset", asset);
         o.put("channel", channel);
         o.put("installedAt", System.currentTimeMillis());
+        if (revision != null) o.put("revision", revision);
+        if (rootfsKey != null) o.put("rootfsKey", rootfsKey);
         writeText(new File(paths.current, ".apacemobile-version.json"), o.toString());
     }
 
     public static String readVersion(Paths paths) {
+        return readMarkerString(paths, "tag");
+    }
+
+    /** Dowolne pole z markera wersji (np. „rootfsKey”, „revision”) — null gdy brak. */
+    public static String readMarkerString(Paths paths, String key) {
+        return readMarkerString(paths.current, key);
+    }
+
+    /** Wariant z jawnym katalogiem (np. backup pre-update po rename current). */
+    public static String readMarkerString(File dir, String key) {
         try {
-            File f = new File(paths.current, ".apacemobile-version.json");
+            File f = new File(dir, ".apacemobile-version.json");
             if (!f.isFile()) return null;
             JSONObject o = new JSONObject(readText(f));
-            return o.optString("tag", null);
+            String v = o.optString(key, null);
+            return v != null && v.length() > 0 ? v : null;
         } catch (Exception e) {
             return null;
         }

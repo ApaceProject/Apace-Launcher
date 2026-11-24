@@ -347,6 +347,7 @@ public class ApaceService extends Service {
             if (state == ApaceService.State.STOPPING) return;
             state = ApaceService.State.STOPPING;
         }
+        final String why = reason;
         startForeground(1, buildNotification(state)); // FGS także gdy stop przyszedł przy STOPPED
         updateNotification(reason == null
                 ? "Stopping Apace…"
@@ -365,6 +366,21 @@ public class ApaceService extends Service {
             } finally {
                 releaseWakeLock();
                 finishAsStopped();
+                // Auto-close (fix „auto close apki mobilnej nie działa”): po idle
+                // auto-stop („battery saving”) zamykamy też apkę — finish + usunięcie
+                // z Recents + stopSelf, żeby proces faktycznie zniknął z pamięci.
+                // Ręczny stop NIGDY nie zamyka apki (użytkownik patrzy w ekran).
+                if ("battery saving".equals(why)) {
+                    if (prefs.autoCloseApp()) {
+                        log("[mobile] Auto-close: idle auto-stop — closing the app "
+                                + "(reopen to start the server again)");
+                        MainActivity.finishFromService();
+                        stopSelf();
+                    } else {
+                        log("[mobile] Auto-close disabled (auto_close_app=false) — "
+                                + "app stays open after idle auto-stop");
+                    }
+                }
             }
         }}.start();
     }

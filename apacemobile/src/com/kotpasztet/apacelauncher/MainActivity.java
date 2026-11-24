@@ -81,16 +81,33 @@ public class MainActivity extends Activity {
     private WebView webView;
     private ValueCallback<Uri[]> fileChooserCallback;
     private Updater.CheckResult lastCheck;
+    private long lastCheckAt = 0;                 // kiedy wykonano ostatni check (ms)
     private boolean updateChecking = false;    // tło-check raz na sesję ekranu Start
+    private TextView updStatus;               // stan sprawdzenia na ekranie Start (nigdy „cicho”)
+    // Dialog aktualizacji otwarty w trakcie checku — pomaluj wynik, gdy check skończy się
+    private TextView pendingResult;
+    private Button pendingApply;
     private boolean webLoaded = false;          // panel page loaded — re-attach never reloads
     private android.os.Bundle pendingWebState;  // WebView history to restore after recreation
     private boolean menuShownAtRoot = false;
+
+    /** Instancja aktywności — ApaceService zamyka apkę po idle auto-stop (auto-close). */
+    private static volatile MainActivity instance;
+
+    /** Auto-recheck (dev: CI jeszcze nie zbudował HEAD) — co 3 min, dopóki apka otwarta. */
+    private static final long DEV_RECHECK_MS = Updater.DEV_RECHECK_MS;
+    private final Runnable devRecheck = new Runnable() { public void run() {
+        if (updateChecking) { ui.postDelayed(this, 15000); return; }
+        if (ApaceService.state() == ApaceService.State.RUNNING) return; // nikt nie patrzy
+        performUpdateCheck(null, null, true); // live — omija cache
+    }};
 
     // ── lifecycle ──────────────────────────────────────────────────────────
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        instance = this;
         paths = new Paths(this);
         prefs = new Prefs(this);
         pendingWebState = savedInstanceState != null
@@ -133,6 +150,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onStop() {
+        ui.removeCallbacks(devRecheck); // recheck tylko przy otwartej apce
         // Strona patchera otwarta? Patch działa kilkanaście minut — auto-stop
         // zabijałby serwer w trakcie joba (na desktopie serwer nigdy nie jest
         // zatrzymywany, więc to był mobile-only failure).
@@ -157,11 +175,29 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (instance == this) instance = null;
         if (webView != null) {
             webView.destroy();
             webView = null;
         }
         super.onDestroy();
+    }
+
+    /**
+     * Auto-close: wywołane przez ApaceService po idle auto-stop — zamyka apkę
+     * (finish + usunięcie z Recents) z wątku serwisu, stąd post na main thread.
+     * Aktywność może być wtedy ukryta (STOp) — to celowe: apka ma zniknąć.
+     */
+    static void finishFromService() {
+        final MainActivity a = instance;
+        if (a == null) return;
+        a.ui.post(new Runnable() { public void run() {
+            try {
+                a.finishAndRemoveTask();
+            } catch (Throwable t) {
+                try { a.finish(); } catch (Throwable ignore) {}
+            }
+        }});
     }
 
     @Override
@@ -550,6 +586,14 @@ public class MainActivity extends Activity {
         note.setGravity(Gravity.CENTER);
         note.setPadding(0, dp(12), 0, 0);
         card.addView(note);
+        // Stan sprawdzenia aktualizacji — zawsze widoczny wynik auto-checku
+        // (up to date / czekamy na CI / błąd sprawdzenia). „Brak reakcji” na
+        // nowy dev-build był zgłaszanym problemem — teraz nic nie jest ciche.
+        updStatus = text("", C_DIM, 10, false);
+        updStatus.setGravity(Gravity.CENTER);
+        updStatus.setPadding(0, dp(8), 0, 0);
+        updStatus.setVisibility(View.GONE);
+        card.addView(updStatus);
         root.addView(card, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -571,6 +615,7 @@ public class MainActivity extends Activity {
         logScroll = null;
         startError = null;
         updOffer = null;
+        updStatus = null;
         applyImmersive(s == ApaceService.State.RUNNING);
         menuShownAtRoot = false;
         if (s == ApaceService.State.RUNNING) {
@@ -599,8 +644,16 @@ public class MainActivity extends Activity {
                 break;
             default:
                 content.addView(viewStart());
-                if (paths.isInstalled() && lastCheck == null && !updateChecking) {
-                    performUpdateCheck(null, null); // auto-check → „Update available”
+                // Wynik checku ma być ZAWSZE widoczny na ekranie Start (nigdy
+                // „cicho”): świeży (< 3 min) wynik malujemy od razu, starszy —
+                // odświeżamy (check() sam poda wynik z cache, jeśli TTL jeszcze żyje).
+                if (paths.isInstalled()) {
+                    if (lastCheck != null
+                            && System.currentTimeMillis() - lastCheckAt < DEV_RECHECK_MS) {
+                        paintStartCheck(lastCheck);
+                    } else if (!updateChecking) {
+                        performUpdateCheck(null, null, false);
+                    }
                 }
         }
     }
@@ -866,7 +919,7 @@ public class MainActivity extends Activity {
         clp.setMargins(0, dp(12), 0, dp(12));
         box.addView(check, clp);
         check.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
-            performUpdateCheck(result, apply);
+            performUpdateCheck(result, apply, true); // przycisk = zawsze na żywo
         }});
         // Kanał dev ↔ main — przełącza źródło pobierania (Updater + InstallerEngine)
         // i od razu ponawia check dla wybranego kanału.
@@ -876,7 +929,7 @@ public class MainActivity extends Activity {
                 .setView(box)
                 .setNegativeButton("Close", null)
                 .show();
-        performUpdateCheck(result, apply); // auto-check od razu po otwarciu
+        performUpdateCheck(result, apply, true); // auto-check od razu po otwarciu (live)
     }
 
     /** Wybór kanału w dialogu aktualizacji: Main (GitHub Releases) | Dev (ghcr :dev). */
@@ -916,7 +969,7 @@ public class MainActivity extends Activity {
                                 TextView result, Button apply) {
         paintChannelChips(main, dev);
         info.setText(channelInfoLine(cur));
-        performUpdateCheck(result, apply);
+        performUpdateCheck(result, apply, true);
     }
 
     private void paintChannelChips(Button main, Button dev) {
@@ -931,39 +984,120 @@ public class MainActivity extends Activity {
                 + "\nChannel: " + ("dev".equals(prefs.channel()) ? "Dev (dev-build)" : "Main (stable)");
     }
 
-    /** Wspólny check update'u: przycisk w dialogu, auto po otwarciu, auto na ekranie Start. */
-    private void performUpdateCheck(final TextView result, final Button apply) {
-        if (updateChecking) return;
+    /** Krótka linia stanu sprawdzenia — nigdy „cicho”. */
+    private String checkStateLine(Updater.CheckResult r) {
+        switch (r.status) {
+            case Updater.OK_AVAILABLE:  return "UPDATE AVAILABLE";
+            case Updater.OK_UPTODATE:  return "up to date";
+            case Updater.OK_CI_PENDING: return "waiting for CI (image older than dev HEAD)";
+            default: return "CHECK FAILED — press Check for updates to retry";
+        }
+    }
+
+    /** Pierwsza linia komunikatu (do jednolinijkowego stanu na ekranie Start). */
+    private static String firstLine(String s, int max) {
+        if (s == null) return "";
+        int nl = s.indexOf('\n');
+        String line = nl >= 0 ? s.substring(0, nl) : s;
+        return line.length() > max ? line.substring(0, max) + "…" : line;
+    }
+
+    /**
+     * Wspólny check update'u: przycisk w dialogu (na żywo), auto po otwarciu
+     * dialogu, auto na ekranie Start (z cache 4 min). Wynik jest ZAWSZE
+     * widoczny: przycisk „Update available”, linia stanu albo błąd z retry.
+     * Gdy CI jeszcze nie zbudował HEAD dev — automatyczny re-check co 3 min.
+     *
+     * Check w locie? Dialog, który właśnie otwarto, dopisuje się do kolejki
+     * (pendingResult) — wbrew starszej wersji NIE zostaje na „Checking…”.
+     */
+    private void performUpdateCheck(final TextView result, final Button apply, final boolean force) {
+        if (updateChecking) {
+            // check już leci (np. auto z ekranu Start, a user otworzył dialog)
+            // — pomaluj ten widok, gdy check się skończy
+            if (result != null) {
+                result.setText("Checking…");
+                pendingResult = result;
+                pendingApply = apply;
+            }
+            return;
+        }
         updateChecking = true;
         final String checkedChannel = prefs.channel();
         if (result != null) result.setText("Checking…");
         new Thread() { public void run() {
-            final Updater.CheckResult r = new Updater(MainActivity.this, prefs, paths, null).check();
-            if (!checkedChannel.equals(prefs.channel())) {
-                // kanał przełączony w trakcie checku (chips) — wynik nieaktualny
-                updateChecking = false;
-                return;
-            }
+            Updater u = new Updater(MainActivity.this, prefs, paths, null);
+            final Updater.CheckResult r = force ? u.checkNow() : u.check();
+            final boolean channelSwitched = !checkedChannel.equals(prefs.channel());
             ui.post(new Runnable() { public void run() {
                 updateChecking = false;
+                if (channelSwitched) {
+                    // kanał przełączony w trakcie checku (chips) — wynik nieaktualny;
+                    // jeśli w kolejce czeka dialog — sprawdź od razu dla NOWEGO kanału
+                    if (pendingResult != null) {
+                        TextView pr = pendingResult; Button pa = pendingApply;
+                        pendingResult = null; pendingApply = null;
+                        performUpdateCheck(pr, pa, true);
+                    }
+                    return;
+                }
                 lastCheck = r;
+                lastCheckAt = System.currentTimeMillis();
                 if (result != null) {
                     result.setText((r.message != null ? r.message + "\n" : "")
-                            + "Latest: " + r.latest
-                            + (r.available ? "  → update available" : "  → up to date"));
+                            + "Latest: " + r.latest + "  →  " + checkStateLine(r));
                 }
                 if (apply != null) {
                     boolean can = r.available && r.assetUrl != null;
                     apply.setEnabled(can);
                     apply.setAlpha(can ? 1f : 0.4f);
                 }
-                if (updOffer != null) {
-                    boolean show = r.available && r.assetUrl != null;
-                    if (show) updOffer.setText("Update available: " + r.latest);
-                    updOffer.setVisibility(show ? View.VISIBLE : View.GONE);
+                // dialog, który przyszedł w trakcie checku — ten sam wynik
+                if (pendingResult != null) {
+                    TextView pr = pendingResult; Button pa = pendingApply;
+                    pendingResult = null; pendingApply = null;
+                    pr.setText((r.message != null ? r.message + "\n" : "")
+                            + "Latest: " + r.latest + "  →  " + checkStateLine(r));
+                    if (pa != null) {
+                        boolean can = r.available && r.assetUrl != null;
+                        pa.setEnabled(can);
+                        pa.setAlpha(can ? 1f : 0.4f);
+                    }
+                }
+                paintStartCheck(r);
+                // dev: CI nie zbudował HEAD → odśwież wynik, gdy build się pojawi
+                ui.removeCallbacks(devRecheck);
+                if (r.ciPending && ApaceService.state() != ApaceService.State.RUNNING) {
+                    ui.postDelayed(devRecheck, DEV_RECHECK_MS);
                 }
             }});
         }}.start();
+    }
+
+    /** Maluje wynik checku na ekranie Start (przycisk „Update available” + linia stanu). */
+    private void paintStartCheck(Updater.CheckResult r) {
+        if (updOffer != null) {
+            boolean show = r.available && r.assetUrl != null;
+            if (show) updOffer.setText("Update available: " + r.latest);
+            updOffer.setVisibility(show ? View.VISIBLE : View.GONE);
+        }
+        if (updStatus != null) {
+            String s = null;
+            if (r.status == Updater.OK_UPTODATE) {
+                s = "Apace is up to date" + (r.latest != null ? " (" + r.latest + ")" : "");
+            } else if (r.status == Updater.OK_CI_PENDING) {
+                s = "Dev: CI has not built "
+                        + (r.headShort != null ? r.headShort : "the newest commit")
+                        + " yet — re-checking in " + (DEV_RECHECK_MS / 60000L) + " min";
+            } else if (r.status == Updater.OK_AVAILABLE) {
+                s = null; // przycisk „Update available” mówi wszystko
+            } else if (r.status == Updater.ERROR) {
+                s = "Update check failed: " + firstLine(r.message, 90)
+                        + " — open Update Apace to retry";
+            }
+            updStatus.setText(s != null ? s : "");
+            updStatus.setVisibility(s != null ? View.VISIBLE : View.GONE);
+        }
     }
 
     private void licenseDialog() {

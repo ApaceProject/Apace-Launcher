@@ -1,19 +1,33 @@
 package com.kotpasztet.apacelauncher;
 
-import android.util.JsonReader;
-
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 
 /**
- * Klient GitHub REST API (releases) — bez bibliotek zewnętrznych, parser JsonReader.
- * Używany do sprawdzania i pobierania aktualizacji Apace (kanał Stable)
- * oraz do rozwiązywania obrazu kanału Dev z ghcr.io (anonimowy pull OCI —
- * dokładnie ten sam mechanizm, którego używa docker-compose.dev.yml).
+ * Klient GitHub REST API (releases) i ghcr.io (OCI) — bez bibliotek zewnętrznych.
+ * Używany do sprawdzania i pobierania aktualizacji Apace (kanał Main = GitHub
+ * Releases, kanał Dev = obraz ghcr.io/kotpasztet/apace:dev).
+ *
+ * Dev (od 1.1.8): obraz jest czytany w całości — lista WSZYSTKICH warstw z
+ * manifestu arm64 klasyfikowana po historii budowania (config.history) na:
+ *  - warstwy SYSTEMOWE (przed „COPY /src/build/Release/latest/”) — bazowy
+ *    Ubuntu 24.04 + Java 17 + .NET 10 + aapt/zipalign + android-framework +
+ *    PowerShell; te trafiają do rootfs telefonu (poprzednio rootfs powstawał
+ *    z ubuntu-base + apt i NIGDY nie dostawał aapt2),
+ *  - warstwy APLIKACYJNE (od „COPY …build/Release/latest…” — zawartość /app),
+ *  - warstwy POMIJANE („apt-get install … docker.io docker-compose-v2”) —
+ *    docker na telefonie jest bezużyteczny (brak gniazda dockera), a to ~110 MB
+ *    compressed / ~400 MB po rozpakowaniu.
+ * Digesty warstw systemowych tworzą „systemKey” — jeśli się nie zmienił,
+ * aktualizacja dev NIE przebudowuje rootfs (szybka ścieżka: tylko /app).
+ *
+ * Zapytania do api.github.com są cacheowane przez ETag/If-None-Match (304 nie
+ * zjada limitu 60/h), a przy 403 (limit — częsty na IP operatorów CGNAT)
+ * zwracany jest świeży (< 10 min) wynik z cache.
  */
 public final class GitHubApi {
 
@@ -21,8 +35,6 @@ public final class GitHubApi {
 
     // ── Kanał Dev: obraz ghcr.io/kotpasztet/apace:dev ──────────────────────
     // Publikowany przez workflow docker-image-dev.yml przy każdym pushu do dev.
-    // Apka ściąga wyłącznie warstwę OCI z zawartością /app (COPY
-    // /src/build/Release/latest/) — Java i .NET ma już własne w rootfs.
     public static final String GHCR_IMAGE = "kotpasztet/apace";
     public static final String GHCR_TAG = "dev";
 
@@ -39,65 +51,111 @@ public final class GitHubApi {
         public List<Asset> assets = new ArrayList<Asset>();
     }
 
+    /** Jedna warstwa OCI z manifestu (digest + rozmiar skompresowany). */
+    public static class Layer {
+        public final String digest; // "sha256:<64hex>"
+        public final long size;     // rozmiar blobu (tar.gz)
+        public boolean skip;        // warstwa docker.io — pomijana na telefonie
+        public boolean app;         // warstwa „aplikacyjna” (zawartość /app)
+        public Layer(String digest, long size) {
+            this.digest = digest;
+            this.size = size;
+        }
+    }
+
+    public static class DevBuild {
+        public String version;      // commit obrazu (12 hex APACE_COMMIT) albo digest indexu
+        public String revision;     // pełny SHA commita z obrazu (APACE_COMMIT), null gdy brak
+        public String created;      // timestamp budowy obrazu (ISO 8601), null gdy brak
+        public String indexDigest;  // digest indexu manifestów (diagnostyka)
+        public String layerDigest;  // digest warstwy „COPY build/Release/latest” (pierwszej app)
+        public List<Layer> layers = new ArrayList<Layer>(); // wszystkie warstwy arm64, w kolejności
+        public String systemKey;    // łańcuch digestów warstw systemowych (bez pominiętych)
+        public String appKey;       // łańcuch digestów warstw aplikacyjnych
+        public long systemSize;     // suma rozmiarów warstw systemowych (bez pominiętych)
+        public long appSize;        // suma rozmiarów warstw aplikacyjnych
+        public int skippedLayers;   // ile warstw pominięto (docker)
+    }
+
+    public static class DevCommit {
+        public String sha;   // pełny SHA HEAD brancha dev
+        public String date;  // committer date HEAD (ISO 8601)
+    }
+
+    /** URL blobu warstwy OCI (pobranie wymaga świeżego anonimowego tokenu). */
+    public static String ghcrBlobUrl(String digest) {
+        return "https://ghcr.io/v2/" + GHCR_IMAGE + "/blobs/" + digest;
+    }
+
+    // ── api.github.com z cache ETag (304 nie liczy się do limitu 60/h) ─────
+
+    /** url → {etag, body, timestampMs} */
+    private static final HashMap<String, String[]> HTTP_CACHE = new HashMap<String, String[]>();
+    private static final long STALE_SERVE_MS = 10 * 60 * 1000L;
+
+    private static String fetchCached(String url) throws Exception {
+        synchronized (HTTP_CACHE) {
+            String[] cached = HTTP_CACHE.get(url);
+            java.net.HttpURLConnection c = Downloader.open(url);
+            c.setRequestProperty("Accept", "application/vnd.github+json");
+            if (cached != null) c.setRequestProperty("If-None-Match", cached[0]);
+            int code;
+            try {
+                code = c.getResponseCode();
+            } catch (Exception e) {
+                // błąd sieci — podaj świeży wynik z cache, jeśli jest
+                if (cached != null && System.currentTimeMillis() - Long.parseLong(cached[2]) < STALE_SERVE_MS) {
+                    return cached[1];
+                }
+                throw e;
+            }
+            if (code == 304 && cached != null) {
+                return cached[1];
+            }
+            if (code == 403) {
+                // limit zapytań (częsty na IP operatorów — CGNAT) — świeży cache ratuje sytuację
+                if (cached != null && System.currentTimeMillis() - Long.parseLong(cached[2]) < STALE_SERVE_MS) {
+                    return cached[1];
+                }
+                throw new Exception("GitHub API rate limit exhausted (403) — try again later.");
+            }
+            if (code != 200) {
+                throw new Exception("GitHub API HTTP " + code);
+            }
+            String etag = c.getHeaderField("ETag");
+            String body = readAll(c.getInputStream());
+            if (etag != null && etag.length() > 0) {
+                HTTP_CACHE.put(url, new String[]{etag, body,
+                        String.valueOf(System.currentTimeMillis())});
+            }
+            return body;
+        }
+    }
+
+    // ── Kanał Main: GitHub Releases ────────────────────────────────────────
+
     /** Najnowszy stabilny release (releases/latest pomija prereleases). */
     public static Release latestRelease() throws Exception {
-        return releaseByApiUrl("https://api.github.com/repos/" + REPO + "/releases/latest");
-    }
-
-    private static Release releaseByApiUrl(String apiUrl) throws Exception {
-        java.net.HttpURLConnection c = Downloader.open(apiUrl);
-        c.setRequestProperty("Accept", "application/vnd.github+json");
-        int code = c.getResponseCode();
-        if (code == 403) {
-            throw new Exception("GitHub API rate limit exhausted (403) — try again later.");
-        }
-        if (code != 200) {
-            throw new Exception("GitHub API HTTP " + code);
-        }
-        JsonReader r = new JsonReader(new InputStreamReader(c.getInputStream(), "UTF-8"));
-        Release rel = parseRelease(r);
-        r.close();
-        if (rel.tag == null) throw new Exception("GitHub API response without tag_name");
-        return rel;
-    }
-
-    private static Release parseRelease(JsonReader r) throws Exception {
+        String body = fetchCached("https://api.github.com/repos/" + REPO + "/releases/latest");
+        JSONObject o = new JSONObject(body);
         Release rel = new Release();
-        r.beginObject();
-        while (r.hasNext()) {
-            String key = r.nextName();
-            if ("tag_name".equals(key)) {
-                rel.tag = r.nextString();
-            } else if ("name".equals(key)) {
-                rel.name = r.peek() == android.util.JsonToken.NULL ? null : r.nextString();
-            } else if ("assets".equals(key)) {
-                r.beginArray();
-                while (r.hasNext()) {
-                    Asset a = new Asset();
-                    r.beginObject();
-                    while (r.hasNext()) {
-                        String k2 = r.nextName();
-                        if ("name".equals(k2)) {
-                            a.name = r.nextString();
-                        } else if ("browser_download_url".equals(k2)) {
-                            a.url = r.nextString();
-                        } else if ("size".equals(k2)) {
-                            a.size = r.nextLong();
-                        } else if ("updated_at".equals(k2)) {
-                            a.updated = r.nextString();
-                        } else {
-                            r.skipValue();
-                        }
-                    }
-                    r.endObject();
-                    rel.assets.add(a);
-                }
-                r.endArray();
-            } else {
-                r.skipValue();
+        rel.tag = o.optString("tag_name", null);
+        if (rel.tag == null || rel.tag.length() == 0) {
+            throw new Exception("GitHub API response without tag_name");
+        }
+        rel.name = o.optString("name", null);
+        JSONArray assets = o.optJSONArray("assets");
+        if (assets != null) {
+            for (int i = 0; i < assets.length(); i++) {
+                JSONObject a = assets.getJSONObject(i);
+                Asset as = new Asset();
+                as.name = a.optString("name", "");
+                as.url = a.optString("browser_download_url", null);
+                as.size = a.optLong("size", 0);
+                as.updated = a.optString("updated_at", null);
+                rel.assets.add(as);
             }
         }
-        r.endObject();
         return rel;
     }
 
@@ -117,30 +175,17 @@ public final class GitHubApi {
         return null;
     }
 
-    // ── Kanał Dev: ghcr.io (OCI) ───────────────────────────────────────────
-
-    public static class DevBuild {
-        public String version;     // commit obrazu (12 hex APACE_COMMIT) albo digest indexu
-        public String layerDigest; // digest warstwy OCI z zawartością /app
-        public String revision;    // pełny SHA commita z obrazu (APACE_COMMIT), null gdy brak
-        public String created;     // timestamp budowy obrazu (ISO 8601), null gdy brak
-    }
-
-    public static class DevCommit {
-        public String sha;   // pełny SHA HEAD brancha dev
-        public String date;  // committer date HEAD (ISO 8601)
-    }
-
-    /** URL blobu warstwy OCI (pobranie wymaga świeżego anonimowego tokenu). */
-    public static String ghcrBlobUrl(String digest) {
-        return "https://ghcr.io/v2/" + GHCR_IMAGE + "/blobs/" + digest;
-    }
+    // ── Kanał Dev: ghcr.io (OCI) — pełny obraz ─────────────────────────────
 
     /**
-     * Najnowszy build dev: anonimowy token ghcr → index manifestów (multi-arch) →
-     * manifest linux/arm64 → config obrazu → historia warstw → warstwa
-     * „COPY /src/build/Release/latest/” (zawartość /app = layout jak w zipie).
-     * Wersja = krótki digest indexu — zmienia się przy każdym pushu do dev.
+     * Najnowszy build dev: anonimowy token ghcr → index manifestów (multi-arch)
+     * → manifest linux/arm64 → config obrazu → klasyfikacja warstw po historii.
+     *
+     * Warstwa „aplikacyjna” zaczyna się od kroku historii zawierającego
+     * „build/Release/latest” (COPY /src/build/Release/latest/ .) — wszystko
+     * później dotyczy tylko /app; wszystko wcześniej to system (Ubuntu, Java,
+     * .NET, aapt2, android-framework, PowerShell). Warstwa z „docker.io
+     * docker-compose-v2” jest pomijana (docker na telefonie jest bezużyteczny).
      */
     public static DevBuild latestDevBuild() throws Exception {
         String tok = ghcrToken();
@@ -176,49 +221,80 @@ public final class GitHubApi {
         String cfgDigest = man.getJSONObject("config").getString("digest");
         JSONObject cfg = new JSONObject(ghcrGet(tok,
                 "https://ghcr.io/v2/" + GHCR_IMAGE + "/blobs/" + cfgDigest, null));
-        JSONArray hist = cfg.getJSONArray("history");
+        JSONArray hist = cfg.optJSONArray("history");
         JSONArray layers = man.getJSONArray("layers");
-        String appLayer = null;
-        for (int h = 0, l = 0; h < hist.length() && l < layers.length(); h++) {
+
+        DevBuild d = new DevBuild();
+        d.indexDigest = indexDigest;
+        for (int i = 0; i < layers.length(); i++) {
+            JSONObject l = layers.getJSONObject(i);
+            d.layers.add(new Layer(l.getString("digest"), l.optLong("size", 0)));
+        }
+        // klasyfikacja po historii (kroki non-empty_layer mapują 1:1 na warstwy)
+        boolean appSection = false;
+        int li = 0;
+        StringBuilder sysKey = new StringBuilder();
+        StringBuilder appKey = new StringBuilder();
+        for (int h = 0; h < (hist != null ? hist.length() : 0) && li < d.layers.size(); h++) {
             JSONObject step = hist.getJSONObject(h);
             if (step.optBoolean("empty_layer", false)) continue;
-            if (step.optString("created_by", "").contains("build/Release/latest")) {
-                appLayer = layers.getJSONObject(l).getString("digest");
-                break;
+            Layer layer = d.layers.get(li);
+            String createdBy = step.optString("created_by", "");
+            if (createdBy.contains("build/Release/latest")) appSection = true;
+            if (createdBy.contains("docker.io docker-compose-v2")) {
+                // docker CLI + compose do samo-aktualizacji panelu przez gniazdo
+                // dockera — na telefonie nie istnieje; pomijamy (~110 MB compressed)
+                layer.skip = true;
+                d.skippedLayers++;
+            } else if (appSection) {
+                layer.app = true;
+                d.appSize += layer.size;
+                if (appKey.length() > 0) appKey.append(',');
+                appKey.append(layer.digest);
+            } else {
+                d.systemSize += layer.size;
+                if (sysKey.length() > 0) sysKey.append(',');
+                sysKey.append(layer.digest);
             }
-            l++;
+            if (appSection && d.layerDigest == null && !layer.skip) {
+                d.layerDigest = layer.digest; // „COPY build/Release/latest”
+            }
+            li++;
         }
-        if (appLayer == null) {
+        d.systemKey = sysKey.toString();
+        d.appKey = appKey.toString();
+        if (d.layerDigest == null || d.appKey.length() == 0) {
             throw new Exception("ghcr image: /app layer (build/Release/latest) not found");
         }
-        DevBuild d = new DevBuild();
         d.revision = extractRevision(cfg);
         d.created = cfg.optString("created", null);
         d.version = d.revision != null && d.revision.length() >= 12
                 ? d.revision.substring(0, 12)
                 : indexDigest.substring(7, 19);
-        d.layerDigest = appLayer;
         return d;
     }
 
     /**
      * Commit, z którego zbudowano obraz: ENV APACE_COMMIT → label
      * org.opencontainers.image.revision → ARG SOURCE_COMMIT z historii.
-     * Sprawdzenie „czy to najnowszy commit” wymaga porównania z HEAD dev.
+     * Puste wartości są pomijane (ENV APACE_COMMIT= przy braku build-arga).
      */
     private static String extractRevision(JSONObject cfg) {
         try {
             JSONArray env = cfg.getJSONObject("config").getJSONArray("Env");
             for (int i = 0; i < env.length(); i++) {
                 String e = env.getString(i);
-                if (e.startsWith("APACE_COMMIT=")) return e.substring("APACE_COMMIT=".length());
+                if (e.startsWith("APACE_COMMIT=")) {
+                    String v = e.substring("APACE_COMMIT=".length()).trim();
+                    if (v.matches("[0-9a-fA-F]{8,40}")) return v;
+                }
             }
         } catch (Exception ignore) {}
         try {
             JSONObject labels = cfg.getJSONObject("config").optJSONObject("Labels");
             if (labels != null) {
-                String l = labels.optString("org.opencontainers.image.revision", null);
-                if (l != null && l.length() >= 8) return l;
+                String l = labels.optString("org.opencontainers.image.revision", "");
+                if (l.trim().matches("[0-9a-fA-F]{8,40}")) return l.trim();
             }
         } catch (Exception ignore) {}
         try {
@@ -238,43 +314,16 @@ public final class GitHubApi {
 
     /** HEAD brancha dev w repozytorium Apace — referencja „najnowszego commita”. */
     public static DevCommit latestDevCommit() throws Exception {
-        java.net.HttpURLConnection c = Downloader.open(
-                "https://api.github.com/repos/" + REPO + "/commits/dev");
-        c.setRequestProperty("Accept", "application/vnd.github+json");
-        int code = c.getResponseCode();
-        if (code == 403) throw new Exception("GitHub API rate limit (403)");
-        if (code != 200) throw new Exception("GitHub API HTTP " + code);
-        JsonReader r = new JsonReader(new InputStreamReader(c.getInputStream(), "UTF-8"));
+        String body = fetchCached("https://api.github.com/repos/" + REPO + "/commits/dev");
+        JSONObject o = new JSONObject(body);
         DevCommit out = new DevCommit();
-        r.beginObject();
-        while (r.hasNext()) {
-            String key = r.nextName();
-            if ("sha".equals(key)) {
-                out.sha = r.nextString();
-            } else if ("commit".equals(key)) {
-                r.beginObject();
-                while (r.hasNext()) {
-                    String k2 = r.nextName();
-                    if ("committer".equals(k2)) {
-                        r.beginObject();
-                        while (r.hasNext()) {
-                            String k3 = r.nextName();
-                            if ("date".equals(k3)) out.date = r.nextString();
-                            else r.skipValue();
-                        }
-                        r.endObject();
-                    } else {
-                        r.skipValue();
-                    }
-                }
-                r.endObject();
-            } else {
-                r.skipValue();
-            }
+        out.sha = o.optString("sha", null);
+        if (out.sha == null || out.sha.length() < 8) {
+            throw new Exception("GitHub API: no sha for dev branch HEAD");
         }
-        r.endObject();
-        r.close();
-        if (out.sha == null) throw new Exception("GitHub API: no sha for dev branch HEAD");
+        try {
+            out.date = o.getJSONObject("commit").getJSONObject("committer").getString("date");
+        } catch (Exception ignore) {}
         return out;
     }
 
@@ -298,7 +347,7 @@ public final class GitHubApi {
     private static String ghcrGet(String token, String url, String accept) throws Exception {
         java.net.HttpURLConnection c = ghcrOpen(token, url, accept);
         int code = c.getResponseCode();
-        if (code != 200) throw new Exception("GHCR HTTP " + code + " przy " + url);
+        if (code != 200) throw new Exception("GHCR HTTP " + code + " at " + url);
         return readAll(c.getInputStream());
     }
 

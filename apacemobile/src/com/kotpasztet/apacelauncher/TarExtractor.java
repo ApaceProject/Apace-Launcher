@@ -23,17 +23,25 @@ public final class TarExtractor {
     /** Opcjonalny filtr prefiksu (warstwy OCI): wycina tylko wpisy z tym prefiksem
      *  i zdejmuje go (np. „app/" z obrazu dockera → zawartość /app do destDir). */
     private final String onlyPrefix;
+    /** Opcjonalne wykluczenia prefiksów (np. „app/” przy rozpakowaniu rootfs z obrazu). */
+    private final String[] excludePrefixes;
 
     public TarExtractor(InputStream in, boolean gzip, File destDir, Progress progress) throws Exception {
-        this(in, gzip, destDir, progress, null);
+        this(in, gzip, destDir, progress, null, null);
     }
 
     public TarExtractor(InputStream in, boolean gzip, File destDir, Progress progress,
                         String onlyPrefix) throws Exception {
+        this(in, gzip, destDir, progress, onlyPrefix, null);
+    }
+
+    public TarExtractor(InputStream in, boolean gzip, File destDir, Progress progress,
+                        String onlyPrefix, String[] excludePrefixes) throws Exception {
         this.raw = in;
         this.destDir = destDir;
         this.progress = progress;
         this.onlyPrefix = onlyPrefix;
+        this.excludePrefixes = excludePrefixes;
         stream = gzip ? new GZIPInputStream(in, 65536) : in;
     }
 
@@ -106,6 +114,30 @@ public final class TarExtractor {
                     continue; // sam katalog „app”
                 }
             }
+            if (excludePrefixes != null) {
+                boolean excluded = false;
+                for (String ex : excludePrefixes) {
+                    if (ex != null && ex.length() > 0 && clean.startsWith(ex)) {
+                        excluded = true;
+                        break;
+                    }
+                }
+                if (excluded) {
+                    skipData(size);
+                    continue;
+                }
+            }
+
+            // Whiteouty OCI/Docker (warstwy obrazu): wpis „.wh.<name>" kasuje plik/
+            // katalog <name> dodany przez WCZESNIEJSZĄ warstwę, a „.wh..wh..opq"
+            // czyści katalog (opaque). Bez tego rootfs z obrazu zawierałby pliki,
+            // które obraz usunął (np. listy apt z warstwy bazowej). Whiteout jako
+            // regularny plik (tar) LUB jako char-device (overlay2) — oba formaty.
+            if (isWhiteout(clean, type)) {
+                skipData(size);
+                applyWhiteout(destDir, clean);
+                continue;
+            }
 
             if ("5".equals(type)) {
                 new File(destDir, clean).mkdirs();
@@ -151,14 +183,76 @@ public final class TarExtractor {
                         }
                     } catch (Throwable e2) { /* zostaw */ }
                 }
+            } else if ("1".equals(type)) {
+                // hardlink — cel jest w tym samym archiwum (ubuntu-base ma np.
+                // usr/bin/perl5.38.2 → usr/bin/perl); brak obsługi zostawiałby dziury
+                String target = pendingLongLink != null ? pendingLongLink : str(hdr, 157, 100);
+                pendingLongLink = null;
+                String cleanTarget = sanitize(target);
+                if (cleanTarget != null) {
+                    File src = new File(destDir, cleanTarget);
+                    File dst = new File(destDir, clean);
+                    dst.getParentFile().mkdirs();
+                    if (dst.exists()) dst.delete();
+                    boolean done = false;
+                    try {
+                        android.system.Os.link(src.getAbsolutePath(), dst.getAbsolutePath());
+                        done = true;
+                    } catch (Throwable e) {
+                        done = false; // brak uprawnień / JVM test — fallback kopiowania
+                    }
+                    if (!done) {
+                        try {
+                            java.io.FileInputStream ti = new java.io.FileInputStream(src);
+                            java.io.FileOutputStream to = new java.io.FileOutputStream(dst);
+                            byte[] b = new byte[65536];
+                            int n2;
+                            while ((n2 = ti.read(b)) > 0) to.write(b, 0, n2);
+                            to.close();
+                            ti.close();
+                            dst.setExecutable(src.canExecute(), false);
+                        } catch (Throwable e2) { /* zostaw */ }
+                    }
+                }
+                skipData(size);
             } else {
-                // '1' hardlink, '3'/'4'/'6' device, '7' — pomijamy zawartość
+                // '3'/'4'/'6' device, '7' — pomijamy zawartość
                 skipData(size);
             }
             bytesSoFar += Math.max(size, 0);
             if (progress != null) progress.onEntry(clean, bytesSoFar);
         }
         stream.close();
+    }
+
+    /** Czy wpis tara to whiteout OCI: plik „.wh.*" albo char-device (overlay2)
+     *  o nazwie „.wh.*". Urządzenia '3'/'4' z innymi nazwami to zwykłe /dev — pomijane. */
+    private static boolean isWhiteout(String clean, String type) {
+        int slash = clean.lastIndexOf('/');
+        String base = slash >= 0 ? clean.substring(slash + 1) : clean;
+        if (!base.startsWith(".wh.")) return false;
+        // overlay2 zapisuje whiteout jako char device 0/0; stary AUFS jako zwykły plik
+        return "0".equals(type) || "\0".equals(type) || "".equals(type)
+                || "3".equals(type) || "4".equals(type);
+    }
+
+    /** Zastosuj semantykę whiteout w już rozpakowanym drzewie (destDir). */
+    private static void applyWhiteout(File destDir, String clean) {
+        try {
+            int slash = clean.lastIndexOf('/');
+            String parent = slash >= 0 ? clean.substring(0, slash) : "";
+            String base = slash >= 0 ? clean.substring(slash + 1) : clean;
+            File dir = new File(destDir, parent);
+            if (".wh..wh..opq".equals(base)) {
+                // katalog "opaque": usuń wszystko, co dołożyły wcześniejsze warstwy
+                File[] kids = dir.listFiles();
+                if (kids != null) for (File k : kids) Paths.rmRf(k);
+            } else {
+                Paths.rmRf(new File(dir, base.substring(".wh.".length())));
+            }
+        } catch (Throwable ignore) {
+            // whiteout nie może wysadzić rozpakowania — najwyżej zostanie stary plik
+        }
     }
 
     private void skipData(long size) throws Exception {
@@ -288,9 +382,19 @@ public final class TarExtractor {
 
     /** Warstwa OCI (tar.gz): tylko wpisy pod onlyPrefix (np. „app/”), bez tego prefiksu. */
     public static void extractTarGz(File tarGz, File destDir, String onlyPrefix, Progress p) throws Exception {
+        extractTarGz(tarGz, destDir, onlyPrefix, null, p);
+    }
+
+    /**
+     * Warstwa OCI (tar.gz) z pełnym filtrowaniem: onlyPrefix (null = wszystko)
+     * i excludePrefixes (np. [„app/”] przy rozpakowaniu systemowej części obrazu
+     * do rootfs — /app jest na telefonie osobnym bind-mountem katalogu Apace).
+     */
+    public static void extractTarGz(File tarGz, File destDir, String onlyPrefix,
+                                    String[] excludePrefixes, Progress p) throws Exception {
         FileInputStream fin = new FileInputStream(tarGz);
         try {
-            new TarExtractor(fin, true, destDir, p, onlyPrefix).extract();
+            new TarExtractor(fin, true, destDir, p, onlyPrefix, excludePrefixes).extract();
         } finally {
             try { fin.close(); } catch (Exception ignore) {}
         }

@@ -28,9 +28,9 @@
 
 | Step | What happens |
 |---|---|
-| First run | Pick the channel: **Main** (stable, Apace GitHub Releases) or **Dev** (the latest dev build, pulled anonymously from the OCI image `ghcr.io/kotpasztet/apace:dev` — the same image `docker-compose.dev.yml` uses; only the `/app` layer, ~120 MB; nothing to paste) |
-| Install | 10 stages: PRoot → Ubuntu ARM64 → libraries → Java 17 → .NET 10 → Apace → smoke test, with a live console |
-| Daily use | The server **auto-starts** when you open the app ("Apace loading…" spinner), then the panel fills the whole screen. When the app is not open for 5 minutes and the game server is off, the server **auto-stops** to save battery (notification says "battery saving"; auto-starts again on reopen) |
+| First run | Pick the channel: **Main** (stable, Apace GitHub Releases) or **Dev** (the latest dev build, pulled anonymously from the OCI image `ghcr.io/kotpasztet/apace:dev` — the same image `docker-compose.dev.yml` uses; the **full image filesystem** is applied: system layers become the rootfs (Ubuntu 24.04 + Java 17 + .NET 10 + aapt2/zipalign + android-framework), the `/app` layers become the program files; ~600 MB, layers cached so later dev updates download only what changed) |
+| Install | 10 stages: PRoot → environment (**Dev**: the image filesystem — Ubuntu 24.04 + Java 17 + .NET 10 + aapt2/zipalign + android-framework; **Main**: Ubuntu ARM64 + apt + Java 17 + .NET 10) → Apace → smoke test, with a live console |
+| Daily use | The server **auto-starts** when you open the app ("Apace loading…" spinner), then the panel fills the whole screen. When the app is not open for 5 minutes and the game server is off, the server **auto-stops** to save battery (notification says "battery saving") **and the app closes itself** (removed from Recents — reopening the app starts the server again; a manual Stop never closes the app) |
 | In the panel | Android **Back** opens the app menu: Stop / Console / Backup / Restore / Update / Settings / Licenses |
 
 Ports: `5000/tcp` panel · `1808/tcp` ApiPort · `19132/udp` Bedrock.

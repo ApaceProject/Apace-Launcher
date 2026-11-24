@@ -2,7 +2,7 @@
 
 This module contains the Apace Launcher Android app (package `com.kotpasztet.apacelauncher`), built **without Gradle**:
 
-- `src/org/apacemobile/` — plain Java sources (no AndroidX, no external dependencies; `javac` source/target 8 against `android.jar`);
+- `src/com/kotpasztet/apacelauncher/` — plain Java sources (no AndroidX, no external dependencies; `javac` source/target 8 against `android.jar`);
 - `res/` — launcher icons, app strings, network security config;
 - `assets/` — `NOTICE.txt` (full license notice) and the embedded PRoot binaries (`assets/proot/`);
 - `keystore/apacemobile.jks` — self-signed release key (store/key password `apacemobile`, alias `apace`), **committed on purpose** so CI and local builds are upgrade-compatible;
