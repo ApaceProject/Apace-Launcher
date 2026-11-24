@@ -54,7 +54,32 @@ public final class Updater {
                 GitHubApi.DevBuild dev = GitHubApi.latestDevBuild();
                 r.latest = dev.version;
                 r.assetUrl = "ghcr-blob:" + dev.layerDigest;
-                r.message = "Source: ghcr.io/kotpasztet/apace:dev (dev image — same as docker-compose.dev.yml)";
+                StringBuilder m = new StringBuilder(
+                        "Source: ghcr.io/kotpasztet/apace:dev\nImage commit: ").append(dev.version);
+                if (dev.created != null && dev.created.length() >= 16) {
+                    m.append(" (built ").append(dev.created.substring(0, 16).replace('T', ' '))
+                            .append(" UTC)");
+                }
+                try {
+                    GitHubApi.DevCommit head = GitHubApi.latestDevCommit();
+                    String headShort = head.sha.substring(0, Math.min(12, head.sha.length()));
+                    m.append("\nDev branch HEAD: ").append(headShort);
+                    boolean imageHasHead = dev.revision != null && dev.revision.length() >= 12
+                            && head.sha.regionMatches(true, 0, dev.revision, 0, 12);
+                    long builtAt = dev.created != null ? parseIso(dev.created) : -1;
+                    long headAt = head.date != null ? parseIso(head.date) : -1;
+                    if (imageHasHead) {
+                        m.append("\nImage matches the latest commit.");
+                    } else if (builtAt >= 0 && headAt >= 0 && builtAt >= headAt) {
+                        m.append("\nImage was built after the latest commit — up to date.");
+                    } else {
+                        m.append("\nWARNING: image is OLDER than the dev branch HEAD — "
+                                + "CI has not built the new commit yet.");
+                    }
+                } catch (Exception e) {
+                    m.append("\n(dev branch HEAD unavailable: ").append(e.getMessage()).append(")");
+                }
+                r.message = m.toString();
             } else {
                 // Kanał Main: najnowszy stabilny release z GitHub Releases.
                 GitHubApi.Release rel = GitHubApi.latestRelease();
@@ -203,6 +228,20 @@ public final class Updater {
         int keep = 2;
         for (int i = 0; i < dirs.size() - keep; i++) {
             Paths.rmRf(dirs.get(i));
+        }
+    }
+
+    /** ISO-8601 („2026-11-24T19:28:56…” → epoch ms), UTC; -1 gdy nie parsowalny. */
+    private static long parseIso(String s) {
+        try {
+            String t = s.length() > 19 ? s.substring(0, 19) : s;
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat(
+                    "yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.ROOT);
+            f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            f.setLenient(false);
+            return f.parse(t).getTime();
+        } catch (Exception e) {
+            return -1;
         }
     }
 

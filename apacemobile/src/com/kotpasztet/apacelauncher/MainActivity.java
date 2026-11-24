@@ -464,12 +464,28 @@ public class MainActivity extends Activity {
                     : "Interrupt — switch to Main (stable)", false);
             abort.setAllCaps(false);
             abort.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
-                prefs.channel(toDev ? "dev" : "main");
-                Toast.makeText(MainActivity.this,
-                        toDev ? "Channel switched to Dev (dev build)"
-                              : "Channel switched to Main (stable)",
-                        Toast.LENGTH_LONG).show();
-                svc(ApaceService.ACTION_STOP);
+                final String chName = toDev ? "Dev (dev build)" : "Main (stable)";
+                // Podwójne potwierdzenie + ostrzeżenia (spec użytkownika)
+                confirm("Interrupt and switch to " + chName + "?",
+                        "WARNING: the server will be stopped immediately — this load "
+                                + "is lost.\n\n"
+                                + "The update channel switches to " + chName + ": the next "
+                                + "update will download that channel's build.",
+                        new Runnable() { public void run() {
+                            confirm("Are you really sure?",
+                                    "Second confirmation — the interrupted load cannot be "
+                                            + "resumed.\n"
+                                            + "The channel change is saved right away "
+                                            + "(switch back any time: Back → Update Apace).",
+                                    new Runnable() { public void run() {
+                                        prefs.channel(toDev ? "dev" : "main");
+                                        Toast.makeText(MainActivity.this,
+                                                toDev ? "Channel switched to Dev (dev build)"
+                                                      : "Channel switched to Main (stable)",
+                                                Toast.LENGTH_LONG).show();
+                                        svc(ApaceService.ACTION_STOP);
+                                    }});
+                        }});
             }});
             LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);

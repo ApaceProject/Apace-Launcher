@@ -120,8 +120,15 @@ public final class GitHubApi {
     // ── Kanał Dev: ghcr.io (OCI) ───────────────────────────────────────────
 
     public static class DevBuild {
-        public String version;     // krótki digest indexu obrazu (12 hex) — wersja w UI
+        public String version;     // commit obrazu (12 hex APACE_COMMIT) albo digest indexu
         public String layerDigest; // digest warstwy OCI z zawartością /app
+        public String revision;    // pełny SHA commita z obrazu (APACE_COMMIT), null gdy brak
+        public String created;     // timestamp budowy obrazu (ISO 8601), null gdy brak
+    }
+
+    public static class DevCommit {
+        public String sha;   // pełny SHA HEAD brancha dev
+        public String date;  // committer date HEAD (ISO 8601)
     }
 
     /** URL blobu warstwy OCI (pobranie wymaga świeżego anonimowego tokenu). */
@@ -185,9 +192,90 @@ public final class GitHubApi {
             throw new Exception("ghcr image: /app layer (build/Release/latest) not found");
         }
         DevBuild d = new DevBuild();
-        d.version = indexDigest.substring(7, 19); // po „sha256:” bierzemy 12 hex
+        d.revision = extractRevision(cfg);
+        d.created = cfg.optString("created", null);
+        d.version = d.revision != null && d.revision.length() >= 12
+                ? d.revision.substring(0, 12)
+                : indexDigest.substring(7, 19);
         d.layerDigest = appLayer;
         return d;
+    }
+
+    /**
+     * Commit, z którego zbudowano obraz: ENV APACE_COMMIT → label
+     * org.opencontainers.image.revision → ARG SOURCE_COMMIT z historii.
+     * Sprawdzenie „czy to najnowszy commit” wymaga porównania z HEAD dev.
+     */
+    private static String extractRevision(JSONObject cfg) {
+        try {
+            JSONArray env = cfg.getJSONObject("config").getJSONArray("Env");
+            for (int i = 0; i < env.length(); i++) {
+                String e = env.getString(i);
+                if (e.startsWith("APACE_COMMIT=")) return e.substring("APACE_COMMIT=".length());
+            }
+        } catch (Exception ignore) {}
+        try {
+            JSONObject labels = cfg.getJSONObject("config").optJSONObject("Labels");
+            if (labels != null) {
+                String l = labels.optString("org.opencontainers.image.revision", null);
+                if (l != null && l.length() >= 8) return l;
+            }
+        } catch (Exception ignore) {}
+        try {
+            JSONArray hist = cfg.getJSONArray("history");
+            for (int i = hist.length() - 1; i >= 0; i--) {
+                String by = hist.getJSONObject(i).optString("created_by", "");
+                int a = by.indexOf("SOURCE_COMMIT=");
+                if (a >= 0) {
+                    a += "SOURCE_COMMIT=".length();
+                    String sha = by.substring(a, Math.min(by.length(), a + 40));
+                    if (sha.matches("[0-9a-f]{8,40}")) return sha;
+                }
+            }
+        } catch (Exception ignore) {}
+        return null;
+    }
+
+    /** HEAD brancha dev w repozytorium Apace — referencja „najnowszego commita”. */
+    public static DevCommit latestDevCommit() throws Exception {
+        java.net.HttpURLConnection c = Downloader.open(
+                "https://api.github.com/repos/" + REPO + "/commits/dev");
+        c.setRequestProperty("Accept", "application/vnd.github+json");
+        int code = c.getResponseCode();
+        if (code == 403) throw new Exception("GitHub API rate limit (403)");
+        if (code != 200) throw new Exception("GitHub API HTTP " + code);
+        JsonReader r = new JsonReader(new InputStreamReader(c.getInputStream(), "UTF-8"));
+        DevCommit out = new DevCommit();
+        r.beginObject();
+        while (r.hasNext()) {
+            String key = r.nextName();
+            if ("sha".equals(key)) {
+                out.sha = r.nextString();
+            } else if ("commit".equals(key)) {
+                r.beginObject();
+                while (r.hasNext()) {
+                    String k2 = r.nextName();
+                    if ("committer".equals(k2)) {
+                        r.beginObject();
+                        while (r.hasNext()) {
+                            String k3 = r.nextName();
+                            if ("date".equals(k3)) out.date = r.nextString();
+                            else r.skipValue();
+                        }
+                        r.endObject();
+                    } else {
+                        r.skipValue();
+                    }
+                }
+                r.endObject();
+            } else {
+                r.skipValue();
+            }
+        }
+        r.endObject();
+        r.close();
+        if (out.sha == null) throw new Exception("GitHub API: no sha for dev branch HEAD");
+        return out;
     }
 
     /** Świeży anonimowy token pull ghcr.io (bloby OCI wymagają Bearer). */
