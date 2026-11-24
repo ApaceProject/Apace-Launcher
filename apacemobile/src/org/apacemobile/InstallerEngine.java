@@ -160,12 +160,11 @@ public final class InstallerEngine {
         String tag; String assetName; String assetUrl; String expectedSha = null;
         if ("main".equals(channel)) {
             stage(9, "Downloading Apace (Dev channel — official dev branch build)");
-            GitHubApi.Release devRel = GitHubApi.releaseByTag(GitHubApi.DEV_TAG);
+            GitHubApi.Release devRel = GitHubApi.devRelease();
             GitHubApi.Asset devAsset = GitHubApi.pickDevArm64Asset(devRel);
             if (devAsset == null) {
                 throw new Exception("No Apace-Dev-linux-arm64.zip asset in the \""
-                        + GitHubApi.DEV_TAG + "\" release (run the Developer Build "
-                        + "workflow in the Apace repo).");
+                        + GitHubApi.DEV_TAG + "\" release.");
             }
             tag = devAsset.updated != null ? devAsset.updated : devRel.tag;
             assetName = devAsset.name;

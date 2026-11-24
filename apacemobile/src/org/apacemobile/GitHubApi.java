@@ -14,8 +14,11 @@ public final class GitHubApi {
 
     public static final String REPO = "KotPasztet/Apace";
 
-    /** Oficjalny build gałęzi dev Apace — rolling prerelease „dev-build”
-     *  publikowany przez workflow development.yml (Developer Build) w repo Apace. */
+    /** Repo launchera — workflow „Build Apace dev-build” publikuje tu fallbackowy
+     *  dev-build, póki oficjalne Apace nie wystawi własnego. */
+    public static final String REPO_LAUNCHER = "KotPasztet/Apace-Launcher";
+
+    /** Rolling release „dev-build” kanału Dev (oficjalne Apace → fallback launcher). */
     public static final String DEV_TAG = "dev-build";
 
     public static class Asset {
@@ -36,9 +39,30 @@ public final class GitHubApi {
         return releaseByApiUrl("https://api.github.com/repos/" + REPO + "/releases/latest");
     }
 
-    /** Release po tagu (także prerelease) — kanał Dev używa rolling release „dev-build”. */
-    public static Release releaseByTag(String tag) throws Exception {
-        return releaseByApiUrl("https://api.github.com/repos/" + REPO + "/releases/tags/" + tag);
+    /** Release po tagu (także prerelease) w danym repo. */
+    public static Release releaseByTag(String repo, String tag) throws Exception {
+        return releaseByApiUrl("https://api.github.com/repos/" + repo + "/releases/tags/" + tag);
+    }
+
+    /**
+     * Release „dev-build” dla kanału Dev: najpierw oficjalne repo Apace
+     * (workflow development.yml), w razie jego braku — build publikowany przez
+     * workflow „Build Apace dev-build” w repo launchera.
+     */
+    public static Release devRelease() throws Exception {
+        try {
+            return releaseByTag(REPO, DEV_TAG);
+        } catch (Exception official) {
+            String msg = official.getMessage() == null ? "" : official.getMessage();
+            if (msg.contains("rate limit")) throw official; // fallback by zawiódł tak samo
+            try {
+                return releaseByTag(REPO_LAUNCHER, DEV_TAG);
+            } catch (Exception fallback) {
+                throw new Exception("No \"dev-build\" release yet — run \"Build Apace dev-build\" "
+                        + "(Actions → Run workflow) in the Apace-Launcher repo, or Developer Build "
+                        + "in the Apace repo (dev branch).");
+            }
+        }
     }
 
     private static Release releaseByApiUrl(String apiUrl) throws Exception {
@@ -46,8 +70,8 @@ public final class GitHubApi {
         c.setRequestProperty("Accept", "application/vnd.github+json");
         int code = c.getResponseCode();
         if (code == 404 && apiUrl.contains("/tags/")) {
-            throw new Exception("No \"dev-build\" release yet — run the Developer Build "
-                    + "workflow in the Apace repo (dev branch) first.");
+            throw new Exception("No release for tag: "
+                    + apiUrl.substring(apiUrl.indexOf("/tags/") + 6));
         }
         if (code == 403) {
             throw new Exception("GitHub API rate limit exhausted (403) — try again later.");

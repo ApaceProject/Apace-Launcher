@@ -28,7 +28,7 @@
 
 | Step | What happens |
 |---|---|
-| First run | Pick the channel: **Main** (stable, Apace GitHub Releases) or **Dev** (the official Apace `dev` branch — the rolling [`dev-build`](https://github.com/KotPasztet/Apace/releases/tag/dev-build) prerelease, works out of the box, nothing to paste) |
+| First run | Pick the channel: **Main** (stable, Apace GitHub Releases) or **Dev** (the Apace `dev` branch — the rolling [`dev-build`](https://github.com/KotPasztet/Apace/releases/tag/dev-build) prerelease, or the one published by this repo's **Build Apace dev-build** workflow; works out of the box, nothing to paste) |
 | Install | 10 stages: PRoot → Ubuntu ARM64 → libraries → Java 17 → .NET 10 → Apace → smoke test, with a live console |
 | Daily use | The server **auto-starts** when you open the app ("Apace loading…" spinner), then the panel fills the whole screen |
 | In the panel | Android **Back** opens the app menu: Stop / Console / Backup / Restore / Update / Settings / Licenses |

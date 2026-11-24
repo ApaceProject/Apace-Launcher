@@ -1,0 +1,69 @@
+name: Build Apace dev-build
+
+# Manual only — builds the Apace dev branch (framework-dependent linux-arm64)
+# and publishes/updates the "dev-build" prerelease in THIS repo.
+# The app's Dev channel reads it as a fallback when the official
+# KotPasztet/Apace "dev-build" release does not exist yet.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Apace (dev branch)
+        uses: actions/checkout@v4
+        with:
+          repository: KotPasztet/Apace
+          ref: dev
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup PowerShell
+        run: |
+          set -e
+          curl -fsSL https://github.com/PowerShell/PowerShell/releases/download/v7.6.1/powershell-7.6.1-linux-x64.tar.gz -o /tmp/pwsh.tgz
+          sudo mkdir -p /opt/microsoft/powershell/7
+          sudo tar zxf /tmp/pwsh.tgz -C /opt/microsoft/powershell/7
+          sudo chmod +x /opt/microsoft/powershell/7/pwsh
+          sudo ln -sf /opt/microsoft/powershell/7/pwsh /usr/local/bin/pwsh
+
+      - name: Build framework-dependent linux-arm64
+        run: pwsh ./publish.ps1 -profiles "framework-dependent-linux-arm64"
+
+      - name: Hard-fail if ApiServer missing
+        run: |
+          set -e
+          test -f build/Release/framework-dependent-linux-arm64/components/ApiServer.dll
+          test -f build/Release/framework-dependent-linux-arm64/launcher/Launcher.dll
+
+      - name: Zip
+        run: |
+          set -e
+          cd build/Release/framework-dependent-linux-arm64
+          zip -r -y "$GITHUB_WORKSPACE/Apace-Dev-linux-arm64.zip" .
+
+      - name: Apace dev commit
+        id: sha
+        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish dev-build release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dev-build
+          name: Apace dev-build @ ${{ steps.sha.outputs.sha }}
+          prerelease: true
+          make_latest: 'false'
+          files: Apace-Dev-linux-arm64.zip
+          body: |
+            Apace `dev` branch @ ${{ steps.sha.outputs.sha }} — published by the
+            Apace-Launcher *Build Apace dev-build* workflow (fallback source for
+            the app's Dev channel when KotPasztet/Apace has no official dev-build yet).
