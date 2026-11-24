@@ -4,7 +4,8 @@
 #   PROJ, JDK (or JAVA_HOME), SDK (or ANDROID_HOME/ANDROID_SDK_ROOT), BT, ANDROID_JAR, OUT
 set -euo pipefail
 
-PROJ=${PROJ:-/home/z/my-project/apacemobile}
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+PROJ=${PROJ:-$SCRIPT_DIR/../apacemobile}
 JDK=${JDK:-${JAVA_HOME:-/home/z/my-project/work/jdk17}}
 SDK=${SDK:-${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/home/z/my-project/work/android-sdk}}}
 BUILD=$PROJ/build
