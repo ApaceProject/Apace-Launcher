@@ -1,5 +1,6 @@
 package com.kotpasztet.apacelauncher;
 
+import android.app.AlarmManager;
 import android.content.Context;
 import android.content.Intent;
 import android.app.Notification;
@@ -12,6 +13,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 
 /**
  * Foreground Service (specyfikacja 6): utrzymuje serwer przy życiu po
@@ -30,6 +32,8 @@ public class ApaceService extends Service {
     public static final String ACTION_STOP = "com.kotpasztet.apacelauncher.STOP";
     public static final String ACTION_RESTART = "com.kotpasztet.apacelauncher.RESTART";
     public static final String ACTION_UPDATE = "com.kotpasztet.apacelauncher.UPDATE";
+    /** Wewnętrzne: dokładny alarm po 5 min ze schowaną apką — sprawdza auto-stop. */
+    public static final String ACTION_AUTOSTOP_CHECK = "com.kotpasztet.apacelauncher.AUTOSTOP_CHECK";
 
     public static final String ACTION_STATE = "com.kotpasztet.apacelauncher.STATE";
     public static final String ACTION_LOG = "com.kotpasztet.apacelauncher.LOG";
@@ -60,15 +64,21 @@ public class ApaceService extends Service {
     private InstallerEngine installer;
 
     // ── Auto-stop oszczędnościowy ──────────────────────────────────────────
-    /** Czy MainActivity jest teraz widoczna (między onStart a onStop). */
-    private static volatile boolean appInForeground = true;
-    /** Moment ostatniej widoczności apki / moment zejścia z pierwszego planu. */
-    private static volatile long lastAppVisibleAt = System.currentTimeMillis();
+    /**
+     * Czy MainActivity jest teraz widoczna (między onStart a onStop).
+     * Domyślnie FALSE: gdy serwer startuje z BootReceiver bez otwierania apki,
+     * licznik idle ma działać (apka przecież nie jest na pierwszym planie).
+     * Start z apki zawsze przechodzi przez noteAppVisible() w onStart, więc
+     * tuż przed naciśnięciem „Start” flaga jest już poprawnie ustawiona.
+     */
+    private static volatile boolean appInForeground = false;
+    /** Moment ostatniej widoczności apki (SystemClock.elapsedRealtime — monotoniczny). */
+    private static volatile long lastAppVisibleAt = SystemClock.elapsedRealtime();
     private static final long IDLE_STOP_MS = 5 * 60 * 1000L;
     private static final long IDLE_CHECK_MS = 30 * 1000L;
     private final Handler idleHandler = new Handler(Looper.getMainLooper());
     private final Runnable idleCheck = new Runnable() { public void run() {
-        try { autoStopIfIdle(); } catch (Exception ignore) {}
+        try { autoStopIfIdle("periodic"); } catch (Exception ignore) {}
         idleHandler.postDelayed(this, IDLE_CHECK_MS);
     }};
 
@@ -145,6 +155,15 @@ public class ApaceService extends Service {
         } else if (ACTION_UPDATE.equals(action)) {
             beginUpdate(intent.getStringExtra("assetUrl"), intent.getStringExtra("version"),
                     intent.getStringExtra("sha256"));
+        } else if (ACTION_AUTOSTOP_CHECK.equals(action)) {
+            // Kontrakt FGS: startForegroundService wymaga startForeground w 5 s.
+            startForeground(1, buildNotification(state));
+            State s = state;
+            if (s == State.STOPPED || s == State.NOT_INSTALLED || s == State.ERROR) {
+                finishAsStopped(); // serwer już nie działa — zdejmij powiadomienie
+            } else {
+                autoStopIfIdle("alarm");
+            }
         }
         return START_STICKY;
     }
@@ -275,6 +294,7 @@ public class ApaceService extends Service {
                     if (ServerEngine.portOpen(0, "127.0.0.1", port, 1500)) {
                         panelReady = true;
                         setState(ApaceService.State.RUNNING);
+                        if (!appInForeground) scheduleAutostopAlarm(IDLE_STOP_MS + 10 * 1000L);
                         updateNotification("Apace is running — panel: 127.0.0.1:" + port);
                         log("[mobile] Panel ready at 127.0.0.1:" + port);
                         statsLoop();
@@ -284,6 +304,7 @@ public class ApaceService extends Service {
                 }
                 if (engine.isAlive()) {
                     setState(ApaceService.State.RUNNING); // proces żyje, panel jeszcze nie odpowiada
+                    if (!appInForeground) scheduleAutostopAlarm(IDLE_STOP_MS + 10 * 1000L);
                     statsLoop();
                 }
             } catch (Throwable t) {
@@ -361,7 +382,8 @@ public class ApaceService extends Service {
     public static void noteAppVisible() {
         appInForeground = true;
         keepServerWhileHidden = false;
-        lastAppVisibleAt = System.currentTimeMillis();
+        lastAppVisibleAt = SystemClock.elapsedRealtime();
+        cancelAutostopAlarm();
     }
 
     /** MainActivity onStop — apka już niewidoczna: dopiero teraz startuje licznik. */
@@ -377,10 +399,46 @@ public class ApaceService extends Service {
     public static void noteAppHidden(boolean keepWhileHidden) {
         appInForeground = false;
         keepServerWhileHidden = keepWhileHidden;
-        lastAppVisibleAt = System.currentTimeMillis();
+        lastAppVisibleAt = SystemClock.elapsedRealtime();
+        // Dokładny alarm: jedyny niezawodny wyzwalacz w Doze/deep sleep, gdy CPU
+        // śpi (keepAwake off) i Handler by się wstrzymał. Check jest idempotentny.
+        State s = state;
+        if (s == State.RUNNING || s == State.STARTING) {
+            scheduleAutostopAlarm(IDLE_STOP_MS + 10 * 1000L);
+        }
     }
 
     private static volatile boolean keepServerWhileHidden = false;
+
+    private static final int AUTOSTOP_REQ = 4242;
+
+    private static PendingIntent autostopPendingIntent(Context c) {
+        Intent i = new Intent(c, ApaceService.class).setAction(ACTION_AUTOSTOP_CHECK);
+        return PendingIntent.getForegroundService(c, AUTOSTOP_REQ, i,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    private static void scheduleAutostopAlarm(long delayMs) {
+        Context c = App.appContext();
+        if (c == null) return;
+        AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
+        if (am == null) return;
+        try {
+            am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    android.os.SystemClock.elapsedRealtime() + delayMs,
+                    autostopPendingIntent(c));
+        } catch (Exception e) {
+            log("[mobile] Auto-stop alarm schedule failed: " + e);
+        }
+    }
+
+    private static void cancelAutostopAlarm() {
+        Context c = App.appContext();
+        if (c == null) return;
+        AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
+        if (am == null) return;
+        try { am.cancel(autostopPendingIntent(c)); } catch (Exception ignore) {}
+    }
 
     /**
      * Po 5 min z zamkniętą apką zatrzymaj serwer panelu (PRoot + .NET z panelem
@@ -390,13 +448,47 @@ public class ApaceService extends Service {
      * klienci gry / panel w LAN). Po ponownym otwarciu apka sama uruchamia
      * serwer (MainActivity.onStart → ACTION_START).
      */
-    private void autoStopIfIdle() {
-        if (state != ApaceService.State.RUNNING) return;
+    /** Diagnoza: loguj przyczynę pominięcia auto-stopu (co najwyżej raz na 5 min). */
+    private String lastIdleSkip = null;
+    private long lastIdleSkipAt = 0;
+
+    private void idleSkipLog(String reason) {
+        long now = System.currentTimeMillis();
+        if (reason.equals(lastIdleSkip) && now - lastIdleSkipAt < 5 * 60 * 1000L) return;
+        lastIdleSkip = reason;
+        lastIdleSkipAt = now;
+        log("[mobile] Auto-stop idle: not stopping — " + reason);
+    }
+
+    /**
+     * Po 5 min z zamkniętą apką zatrzymaj serwer panelu (PRoot + .NET z panelem
+     * Solace), żeby nie marnował baterii. Zatrzymanie NIGDY nie następuje, gdy
+     * apka jest otwarta (pierwszy plan), ani gdy serwer gry (JVM Minecraft)
+     * działa w tle, ani gdy ktoś z zewnątrz jest połączony (Minecraft Earth /
+     * klienci gry / panel w LAN). Po ponownym otwarciu apka sama uruchamia
+     * serwer (MainActivity.onStart → ACTION_START).
+     *
+     * Wywoływane z dwóch niezależnych źródeł: pętla Handler co 30 s (działa,
+     * gdy CPU nie śpi) oraz dokładny alarm AlarmManager po ~5 min (działa też
+     * w Doze — patrz noteAppHidden). Argument „source” tylko do logu.
+     */
+    private void autoStopIfIdle(String source) {
+        State s = state;
+        if (s != State.RUNNING) return;
         if (appInForeground) return;                 // apka otwarta → nigdy nie zatrzymuj
-        if (keepServerWhileHidden) return;           // strona patchera była otwarta → job może trwać
-        if (System.currentTimeMillis() - lastAppVisibleAt < IDLE_STOP_MS) return;
-        if (engine.javaServerRunning()) return;      // serwer gry działa w tle → nigdy
-        if (engine.hasExternalConnections()) return; // aktywny klient z zewnątrz → nie zatrzymuj
+        if (keepServerWhileHidden) {                 // strona patchera była otwarta → job może trwać
+            idleSkipLog("Patcher page was open — patch job may still be running (" + source + ")");
+            return;
+        }
+        if (android.os.SystemClock.elapsedRealtime() - lastAppVisibleAt < IDLE_STOP_MS) return;
+        if (engine.javaServerRunning()) {            // serwer gry działa w tle → nigdy
+            idleSkipLog("Minecraft (Java) server is running in background (" + source + ")");
+            return;
+        }
+        if (engine.hasExternalConnections()) {       // aktywny klient z zewnątrz → nie zatrzymuj
+            idleSkipLog("external client connected (game/panel in LAN) (" + source + ")");
+            return;
+        }
         log("[mobile] Auto-stop: app closed for 5+ min, Java server off, no external clients — stopping to save battery");
         beginStop("battery saving");
     }
@@ -558,6 +650,7 @@ public class ApaceService extends Service {
     @Override
     public void onDestroy() {
         idleHandler.removeCallbacksAndMessages(null);
+        cancelAutostopAlarm();
         instance = null;
         releaseWakeLock();
         super.onDestroy();

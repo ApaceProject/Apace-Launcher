@@ -211,7 +211,14 @@ public final class ServerEngine {
     /**
      * Czy ktoś jest połączony z zewnątrz (Minecraft Earth / klient gry / panel w LAN):
      * /proc/net/tcp z połączeniem ESTABLISHED na portach serwisowych (panel 5000,
-     * ApiPort 1808, event bus 5532) z adresu innym niż loopback.
+     * ApiPort 1808, event bus 5532) z adresu innego niż własny (loopback / adres
+     * interfejsu tego urządzenia).
+     *
+     * KLUCZOWE (bug auto-stopu): połączenia własne panelu (SignalR, event bus,
+     * ApiServer, WebView) w /proc/net/tcp6 pojawiają się jako IPv4-mapped
+     * „0000000000000000FFFF00000100007F” (::ffff:127.0.0.1) albo pod adresem
+     * własnego WLAN urządzenia — dawniej nie były rozpoznawane jako loopback,
+     * więc auto-stop widział „klienta z zewnątrz” non stop i nigdy nie odpalał.
      */
     public boolean hasExternalConnections() {
         String[] ports = {
@@ -225,13 +232,81 @@ public final class ServerEngine {
                     String[] parts = line.trim().split("\\s+");
                     if (parts.length < 10 || !parts[3].equals("01")) continue; // 01 = ESTABLISHED
                     if (!isServicePort(parts[1], ports)) continue;             // local_address:port
-                    if (isLoopback(parts[2])) continue;                        // rem_address
+                    if (isSelfRemote(parts[2])) continue;                      // rem_address własny?
                     return true;
                 }
                 br.close();
             } catch (Exception ignore) {} // brak dostępu do /proc/net → traktuj jako brak
         }
         return false;
+    }
+
+    // ── Rozpoznawanie adresów własnych w /proc/net ────────────────────────
+
+    /** Cache adresów własnych (NetworkInterface) — odświeżany co 15 s. */
+    private static volatile long selfHexAt = -60000;
+    private static volatile java.util.Set<String> selfHex = null;
+
+    private static java.util.Set<String> selfAddressHex() {
+        long now = android.os.SystemClock.elapsedRealtime();
+        java.util.Set<String> cached = selfHex;
+        if (cached != null && now - selfHexAt < 15000) return cached;
+        java.util.Set<String> out = new java.util.HashSet<String>();
+        try {
+            for (java.net.NetworkInterface nif : java.util.Collections
+                    .list(java.net.NetworkInterface.getNetworkInterfaces())) {
+                for (java.net.InetAddress a : java.util.Collections.list(nif.getInetAddresses())) {
+                    byte[] b = a.getAddress();
+                    if (b == null) continue;
+                    if (b.length == 4) out.add(ipv4ReversedHex(b));
+                    else if (b.length == 16) out.add(ipv6ReversedHex(b));
+                }
+            }
+        } catch (Throwable ignore) {}
+        selfHex = out;
+        selfHexAt = now;
+        return out;
+    }
+
+    /**
+     * rem_address HEX (z tcp lub tcp6) — czy to adres „własny” (nie zewnętrzny):
+     * 127.0.0.1, ::1, postać IPv4-mapped ::ffff:x.x.x.x, 0.0.0.0/:: oraz dowolny
+     * adres interfejsu tego urządzenia (połączenie panelu z samym sobą przez WLAN).
+     * Format /proc/net: IPv4 = odwrotny dword („0100007f”=127.0.0.1), IPv6 = 4
+     * odwrotnie zapisane dwordy (::1 → „00000000000000000000000001000000”).
+     */
+    private boolean isSelfRemote(String addrHex) {
+        int c = addrHex.lastIndexOf(':');
+        if (c <= 0) return false;
+        String ip = addrHex.substring(0, c).toLowerCase(java.util.Locale.ROOT);
+        if (ip.length() == 8) return isSelfV4Hex(ip);
+        if (ip.length() == 32) {
+            if (ip.startsWith("0000000000000000ffff0000")) return isSelfV4Hex(ip.substring(24));
+            if (ip.equals("00000000000000000000000001000000") || ip.matches("^0+$")) return true;
+            return selfAddressHex().contains(ip);
+        }
+        return false;
+    }
+
+    private static boolean isSelfV4Hex(String v4) {
+        return v4.equals("0100007f") || v4.equals("00000000") || selfAddressHex().contains(v4);
+    }
+
+    /** IPv4 (4 bajty network order) → hex jak w /proc/net/tcp (odwrócony dword). */
+    private static String ipv4ReversedHex(byte[] b) {
+        return String.format(java.util.Locale.ROOT, "%02x%02x%02x%02x",
+                b[3] & 0xff, b[2] & 0xff, b[1] & 0xff, b[0] & 0xff);
+    }
+
+    /** IPv6 (16 bajtów network order) → hex jak w /proc/net/tcp6 (4 odwrócone dwordy). */
+    private static String ipv6ReversedHex(byte[] b) {
+        StringBuilder sb = new StringBuilder(32);
+        for (int g = 3; g >= 0; g--) {
+            int o = g * 4;
+            sb.append(String.format(java.util.Locale.ROOT, "%02x%02x%02x%02x",
+                    b[o + 3] & 0xff, b[o + 2] & 0xff, b[o + 1] & 0xff, b[o] & 0xff));
+        }
+        return sb.toString();
     }
 
     /** local_address z /proc/net/tcp w formacie HEX „AABBCCDD:1F90”. */
@@ -243,16 +318,6 @@ public final class ServerEngine {
             for (String p : ports) if (Integer.parseInt(p) == port) return true;
         } catch (Exception ignore) {}
         return false;
-    }
-
-    /** rem_address HEX (IPv4 „0F00002A:.." lub IPv6 32 cyfr) — czy to loopback. */
-    private static boolean isLoopback(String addrHex) {
-        int c = addrHex.lastIndexOf(':');
-        if (c <= 0) return false;
-        String ip = addrHex.substring(0, c).toLowerCase();
-        if (ip.length() == 8) return ip.equals("0100007f"); // 127.0.0.1
-        return ip.startsWith("00000000000000000000000001000000") // ::1
-                || ip.matches("^0+$"); // nieokreślony (nasłuch nie mający klientów)
     }
 
     /** Czy TCP port nasłuchuje (czekanie na panel). */
