@@ -174,6 +174,7 @@ public class ApaceService extends Service {
         lastError = null;
         lastInstallStage = null;
         installCancelled = false;
+        startForeground(1, buildNotification(state)); // FGS po ewentualnym stopForeground ze stopu
         updateNotification("Installing Apace…");
         installer = new InstallerEngine(this, prefs, paths, new InstallerEngine.Callback() {
             public void stage(final int index, final int total, final String label) {
@@ -209,7 +210,19 @@ public class ApaceService extends Service {
                 }});
             }
         });
-        worker = new Thread() { public void run() { installer.run(); }};
+        worker = new Thread() { public void run() {
+            try {
+                installer.run();
+            } catch (Throwable t) {
+                // niezłapany wyjątek w wątku zabija cały proces → zamarłe powiadomienie
+                // i „app crashed” przy kolejnym otwarciu — łapiemy i kończymy czysto
+                log("[mobile] INSTALL ERROR: " + t);
+                setStateError(t.getMessage() != null ? t.getMessage() : t.toString());
+                ui.post(new Runnable() { public void run() {
+                    updateNotification("Installation failed");
+                }});
+            }
+        }};
         worker.start();
     }
 
@@ -224,7 +237,7 @@ public class ApaceService extends Service {
         lastError = null;
         panelReady = false;
         acquireWakeLock();
-        updateNotification("Starting Apace…");
+        startForeground(1, buildNotification(state)); // „Starting the server…” + FGS także po stopForeground ze stopu
         final PRoot.LogSink sink = new PRoot.LogSink() {
             public void onLine(String line) { log(line); }
         };
@@ -232,41 +245,49 @@ public class ApaceService extends Service {
             engine.start(sink, new Runnable() {
                 public void run() {
                     // process ended on its own (crash or Ctrl-C from console)
+                    try {
+                        engine.stop(sink);
+                    } catch (Throwable t) {
+                        log("[mobile] Cleanup after exit error: " + t);
+                    }
                     releaseWakeLock();
-                    engine.stop(sink);
                     if (state == ApaceService.State.RUNNING || state == ApaceService.State.STARTING) {
                         setStateError("Server process exited (exit code in the console log)");
+                        updateNotification(lastError != null ? "Error: " + lastError : "Error");
                     } else {
-                        setState(ApaceService.State.STOPPED);
+                        finishAsStopped();
                     }
-                    updateNotification("Server stopped");
                 }
             });
         } catch (final Exception e) {
             releaseWakeLock();
             setStateError(e.getMessage());
-            setState(ApaceService.State.ERROR);
+            updateNotification("Start failed");
             return;
         }
         // czekanie na panel (specyfikacja: „Czeka na dostępność panelu”)
         new Thread() { public void run() {
-            int port = prefs.panelPort();
-            long deadline = System.currentTimeMillis() + 5 * 60 * 1000L;
-            while (System.currentTimeMillis() < deadline) {
-                if (engine.isAlive() == false) return; // monitor zgłosi stop
-                if (ServerEngine.portOpen(0, "127.0.0.1", port, 1500)) {
-                    panelReady = true;
-                    setState(ApaceService.State.RUNNING);
-                    updateNotification("Apace is running — panel: 127.0.0.1:" + port);
-                    log("[mobile] Panel ready at 127.0.0.1:" + port);
-                    statsLoop();
-                    return;
+            try {
+                int port = prefs.panelPort();
+                long deadline = System.currentTimeMillis() + 5 * 60 * 1000L;
+                while (System.currentTimeMillis() < deadline) {
+                    if (engine.isAlive() == false) return; // monitor zgłosi stop
+                    if (ServerEngine.portOpen(0, "127.0.0.1", port, 1500)) {
+                        panelReady = true;
+                        setState(ApaceService.State.RUNNING);
+                        updateNotification("Apace is running — panel: 127.0.0.1:" + port);
+                        log("[mobile] Panel ready at 127.0.0.1:" + port);
+                        statsLoop();
+                        return;
+                    }
+                    try { Thread.sleep(2000); } catch (InterruptedException e) { return; }
                 }
-                try { Thread.sleep(2000); } catch (InterruptedException e) { return; }
-            }
-            if (engine.isAlive()) {
-                setState(ApaceService.State.RUNNING); // proces żyje, panel jeszcze nie odpowiada
-                statsLoop();
+                if (engine.isAlive()) {
+                    setState(ApaceService.State.RUNNING); // proces żyje, panel jeszcze nie odpowiada
+                    statsLoop();
+                }
+            } catch (Throwable t) {
+                log("[mobile] Panel wait error: " + t);
             }
         }}.start();
     }
@@ -275,15 +296,21 @@ public class ApaceService extends Service {
         final long[] last = { lastCpuJiffies < 0 ? -1 : lastCpuJiffies };
         new Thread() { public void run() {
             while (engine.isAlive()) {
-                ServerEngine.Stats s = engine.stats(last[0], last);
-                android.os.Bundle b = new android.os.Bundle();
-                b.putFloat("cpu", s.cpuPercent);
-                b.putLong("rss", s.rssBytes);
-                b.putLong("uptime", s.uptimeMs);
-                b.putInt("procs", s.processes);
-                broadcast(null, ACTION_STATS, b);
-                lastCpuJiffies = last[0];
-                try { Thread.sleep(2000); } catch (InterruptedException e) { return; }
+                try {
+                    ServerEngine.Stats s = engine.stats(last[0], last);
+                    android.os.Bundle b = new android.os.Bundle();
+                    b.putFloat("cpu", s.cpuPercent);
+                    b.putLong("rss", s.rssBytes);
+                    b.putLong("uptime", s.uptimeMs);
+                    b.putInt("procs", s.processes);
+                    broadcast(null, ACTION_STATS, b);
+                    lastCpuJiffies = last[0];
+                    Thread.sleep(2000);
+                } catch (InterruptedException e) {
+                    return;
+                } catch (Throwable t) {
+                    break; // pętla statystyk nigdy nie może zabić procesu apki
+                }
             }
         }}.start();
     }
@@ -299,6 +326,7 @@ public class ApaceService extends Service {
             if (state == ApaceService.State.STOPPING) return;
             state = ApaceService.State.STOPPING;
         }
+        startForeground(1, buildNotification(state)); // FGS także gdy stop przyszedł przy STOPPED
         updateNotification(reason == null
                 ? "Stopping Apace…"
                 : "Stopping Apace… (" + reason + ")");
@@ -306,11 +334,27 @@ public class ApaceService extends Service {
             public void onLine(String line) { log(line); }
         };
         new Thread() { public void run() {
-            engine.stop(sink);
-            releaseWakeLock();
-            setState(ApaceService.State.STOPPED);
-            updateNotification("Server stopped");
+            // Stop MUSI zawsze dojść do końca: niezłapany wyjątek w tym wątku
+            // zabija cały proces → powiadomienie utyka na „Stopping…”, a Android
+            // pokaże „app crashed” dopiero przy kolejnym otwarciu apki.
+            try {
+                engine.stop(sink);
+            } catch (Throwable t) {
+                log("[mobile] Stop error: " + t);
+            } finally {
+                releaseWakeLock();
+                finishAsStopped();
+            }
         }}.start();
+    }
+
+    /** Stan STOPPED + zdjęcie powiadomienia FGS — serwer nie działa, nic nie wisi. */
+    private void finishAsStopped() {
+        setState(ApaceService.State.STOPPED);
+        updateNotification("Server stopped");
+        stopForeground(true);
+        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        nm.cancel(1);
     }
 
     /** MainActivity onStart — apka otwarta: auto-stop wyłączony, licznik wyzerowany. */
@@ -352,15 +396,22 @@ public class ApaceService extends Service {
                 return;
             }
         }
+        startForeground(1, buildNotification(state));
         updateNotification("Restarting Apace…");
         final PRoot.LogSink sink = new PRoot.LogSink() {
             public void onLine(String line) { log(line); }
         };
         new Thread() { public void run() {
-            engine.stop(sink);
-            releaseWakeLock();
-            try { Thread.sleep(1500); } catch (InterruptedException e) {}
-            beginStart();
+            try {
+                engine.stop(sink);
+                releaseWakeLock();
+                try { Thread.sleep(1500); } catch (InterruptedException e) {}
+                beginStart();
+            } catch (Throwable t) {
+                log("[mobile] Restart error: " + t);
+                releaseWakeLock();
+                finishAsStopped();
+            }
         }}.start();
     }
 
@@ -371,6 +422,7 @@ public class ApaceService extends Service {
             if (state == ApaceService.State.UPDATING || state == ApaceService.State.INSTALLING) return;
             state = ApaceService.State.UPDATING;
         }
+        startForeground(1, buildNotification(state)); // „Updating…” + FGS
         updateNotification("Updating Apace…");
         new Thread() { public void run() {
             PRoot.LogSink sink = new PRoot.LogSink() { public void onLine(String l) { log(l); } };
@@ -393,11 +445,12 @@ public class ApaceService extends Service {
                         broadcast(null, ACTION_INSTALL_PROGRESS, b);
                     }
                 });
-                setState(ApaceService.State.STOPPED);
-                updateNotification("Updated to " + version);
+                log("[update] Updated to " + version);
+                finishAsStopped();
             } catch (final Exception e) {
                 log("[update] ERROR: " + e.getMessage());
                 setStateError(e.getMessage());
+                updateNotification("Update failed");
             }
         }}.start();
     }

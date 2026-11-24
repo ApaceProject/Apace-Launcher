@@ -89,7 +89,6 @@ public class MainActivity extends Activity {
     private File exportBackup;
     private Updater.CheckResult lastCheck;
     private boolean menuShownAtRoot = false;
-    private long lastStopRequestedAt = 0;
 
     // ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -124,13 +123,16 @@ public class MainActivity extends Activity {
         f.addAction(ApaceService.ACTION_INSTALL_PROGRESS);
         registerReceiver(recv, f);
         // Auto-start: opening the app starts the server when it is not running.
+        // Spinner od razu — bez migania guzikiem „Start Apace” (guzik zostaje
+        // tylko dla stanu błędu, żeby użytkownik widział komunikat i mógł ponowić).
         ApaceService.State s = ApaceService.state();
         if (paths.isInstalled()
-                && (s == ApaceService.State.STOPPED || s == ApaceService.State.ERROR)
-                && System.currentTimeMillis() - lastStopRequestedAt > 10000) {
+                && (s == ApaceService.State.STOPPED || s == ApaceService.State.ERROR)) {
+            showBusyNow("Apace loading…");
             svc(ApaceService.ACTION_START);
+        } else {
+            showState();
         }
-        showState();
     }
 
     @Override
@@ -687,7 +689,6 @@ public class MainActivity extends Activity {
                 }, new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int w) {
                         if (w == 0) {
-                            if (running) lastStopRequestedAt = System.currentTimeMillis();
                             svc(running ? ApaceService.ACTION_STOP : ApaceService.ACTION_START);
                             if (!running) showBusyNow("Apace loading…");
                         }
@@ -999,8 +1000,10 @@ public class MainActivity extends Activity {
         @Override public void onReceive(Context c, Intent i) {
             String a = i.getAction();
             if (ApaceService.ACTION_STATE.equals(a)) {
-                String err = i.getStringExtra("error");
-                if (err != null) ApaceService.setStateError(err);
+                // NIE wolno tu ponownie wołać setStateError z extra „error” — serwis
+                // rozgłasza stan z błędem, a echo wołałoby setStateError w nieskończoną
+                // pętlę broadcastów (freeze + „app crashed” przy otwarciu apki).
+                // lastError jest już ustawione w serwisie i viewStart() je czyta.
                 showState();
             } else if (ApaceService.ACTION_INSTALL_PROGRESS.equals(a)) {
                 if (progBox != null) {
