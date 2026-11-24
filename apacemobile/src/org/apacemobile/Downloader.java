@@ -20,13 +20,33 @@ public final class Downloader {
     }
 
     public static String download(String url, File dest, Progress progress) throws Exception {
+        return download(url, dest, progress, null);
+    }
+
+    /**
+     * Wariant z tokenem Bearer (bloby OCI z ghcr.io). Przekierowania prowadzone
+     * ręcznie: Authorization idzie tylko do tego samego hosta (token nie wycieka
+     * do blob-storage), bez niego — normalne 302.
+     */
+    public static String download(String url, File dest, Progress progress, String bearer) throws Exception {
         File part = new File(dest.getParentFile(), dest.getName() + ".part");
         part.getParentFile().mkdirs();
         long done = 0;
         MessageDigest sha = null;
         try {
-            HttpURLConnection c = open(url);
+            HttpURLConnection c = open(url, bearer);
+            c.setInstanceFollowRedirects(false);
             int code = c.getResponseCode();
+            int hops = 0;
+            while ((code == 301 || code == 302 || code == 303 || code == 307 || code == 308) && hops < 5) {
+                String loc = c.getHeaderField("Location");
+                if (loc == null) throw new Exception("Redirect without Location przy " + url);
+                boolean sameHost = new URL(loc).getHost().equals(new URL(url).getHost());
+                c = open(loc, sameHost ? bearer : null);
+                c.setInstanceFollowRedirects(false);
+                code = c.getResponseCode();
+                hops++;
+            }
             if (code != 200) {
                 throw new Exception("HTTP " + code + " przy pobieraniu " + url);
             }
@@ -60,11 +80,16 @@ public final class Downloader {
     }
 
     public static HttpURLConnection open(String url) throws Exception {
+        return open(url, null);
+    }
+
+    public static HttpURLConnection open(String url, String bearer) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setConnectTimeout(20000);
         c.setReadTimeout(60000);
         c.setInstanceFollowRedirects(true);
         c.setRequestProperty("User-Agent", "ApaceMobile/1.0 (Android)");
+        if (bearer != null) c.setRequestProperty("Authorization", "Bearer " + bearer);
         return c;
     }
 

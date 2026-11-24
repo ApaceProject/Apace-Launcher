@@ -193,6 +193,68 @@ public final class ServerEngine {
         os.flush();
     }
 
+    /**
+     * Czy serwer Java (JVM Fabric/Minecraft) działa: cmdline procesów środowiska
+     * zawiera binarkę java (proot pokazuje w cmdline realne ścieżki rootfs).
+     * Używane przez auto-stop idle: java ON → nigdy nie zatrzymuj serwera.
+     */
+    public boolean javaServerRunning() {
+        for (int pid : findEnvProcesses()) {
+            for (String tok : readCmdline(pid).split(" ")) {
+                String t = tok.trim();
+                if (t.equals("java") || t.endsWith("/java")) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Czy ktoś jest połączony z zewnątrz (Minecraft Earth / klient gry / panel w LAN):
+     * /proc/net/tcp z połączeniem ESTABLISHED na portach serwisowych (panel 5000,
+     * ApiPort 1808, event bus 5532) z adresu innym niż loopback.
+     */
+    public boolean hasExternalConnections() {
+        String[] ports = {
+                String.valueOf(prefs.panelPort()), String.valueOf(prefs.apiPort()), "5532"};
+        for (String f : new String[]{"/proc/net/tcp", "/proc/net/tcp6"}) {
+            try {
+                java.io.BufferedReader br = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(new FileInputStream(f), "UTF-8"), 8192);
+                String line;
+                while ((line = br.readLine()) != null) {
+                    String[] parts = line.trim().split("\\s+");
+                    if (parts.length < 10 || !parts[3].equals("01")) continue; // 01 = ESTABLISHED
+                    if (!isServicePort(parts[1], ports)) continue;             // local_address:port
+                    if (isLoopback(parts[2])) continue;                        // rem_address
+                    return true;
+                }
+                br.close();
+            } catch (Exception ignore) {} // brak dostępu do /proc/net → traktuj jako brak
+        }
+        return false;
+    }
+
+    /** local_address z /proc/net/tcp w formacie HEX „AABBCCDD:1F90”. */
+    private static boolean isServicePort(String addrHex, String[] ports) {
+        int c = addrHex.lastIndexOf(':');
+        if (c < 0) return false;
+        try {
+            int port = Integer.parseInt(addrHex.substring(c + 1), 16);
+            for (String p : ports) if (Integer.parseInt(p) == port) return true;
+        } catch (Exception ignore) {}
+        return false;
+    }
+
+    /** rem_address HEX (IPv4 „0F00002A:.." lub IPv6 32 cyfr) — czy to loopback. */
+    private static boolean isLoopback(String addrHex) {
+        int c = addrHex.lastIndexOf(':');
+        if (c <= 0) return false;
+        String ip = addrHex.substring(0, c).toLowerCase();
+        if (ip.length() == 8) return ip.equals("0100007f"); // 127.0.0.1
+        return ip.startsWith("00000000000000000000000001000000") // ::1
+                || ip.matches("^0+$"); // nieokreślony (nasłuch nie mający klientów)
+    }
+
     /** Czy TCP port nasłuchuje (czekanie na panel). */
     public static boolean portOpen(int unused, String host, int port, int timeoutMs) {
         Socket s = new Socket();

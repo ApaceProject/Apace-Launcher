@@ -155,22 +155,30 @@ public final class InstallerEngine {
         stage(8, "Downloading .NET 10 ASP.NET Core Runtime (~100 MB)");
         installDotnet();
 
-        // ── 9. Pliki Apace (Main = GitHub Releases, Dev = oficjalny dev-build) ─
+        // ── 9. Pliki Apace (Stable = GitHub Releases, Dev = obraz ghcr.io:dev) ─
         String channel = prefs.channel();
         String tag; String assetName; String assetUrl; String expectedSha = null;
         if ("main".equals(channel)) {
-            stage(9, "Downloading Apace (Dev channel — official dev branch build)");
-            GitHubApi.Release devRel = GitHubApi.releaseByTag(GitHubApi.DEV_TAG);
-            GitHubApi.Asset devAsset = GitHubApi.pickDevArm64Asset(devRel);
-            if (devAsset == null) {
-                throw new Exception("No Apace-Dev-linux-arm64.zip asset in the \""
-                        + GitHubApi.DEV_TAG + "\" release (run the Developer Build "
-                        + "workflow in the Apace repo).");
-            }
-            tag = devAsset.updated != null ? devAsset.updated : devRel.tag;
-            assetName = devAsset.name;
-            assetUrl = devAsset.url;
-            cb.detail("dev-build @ " + tag);
+            stage(9, "Downloading Apace (Dev channel — ghcr.io/kotpasztet/apace:dev)");
+            GitHubApi.DevBuild dev = GitHubApi.latestDevBuild();
+            cb.detail("ghcr.io/kotpasztet/apace:dev @ " + dev.version);
+            File layer = new File(paths.cache, "apace-dev-app.tgz");
+            Downloader.download(GitHubApi.ghcrBlobUrl(dev.layerDigest), layer,
+                    new Downloader.Progress() {
+                        public void onProgress(long d, long t) {
+                            cb.percent(t > 0 ? (float) d / t : 0f);
+                        }
+                    }, GitHubApi.ghcrToken());
+            checkCancel();
+            stage(9, "Extracting Apace (app layer)");
+            Paths.mkdirs(paths.current);
+            TarExtractor.extractTarGz(layer, paths.current, "app/", new TarExtractor.Progress() {
+                public void onEntry(String name, long soFar) { cb.percent(0.9f); }
+            });
+            layer.delete();
+            tag = dev.version;
+            assetName = "ghcr.io/kotpasztet/apace:dev";
+            assetUrl = GitHubApi.ghcrBlobUrl(dev.layerDigest);
         } else {
             stage(9, "Downloading Apace (Main channel — GitHub Releases)");
             GitHubApi.Release rel = GitHubApi.latestRelease();
@@ -182,25 +190,25 @@ public final class InstallerEngine {
             assetName = asset.name;
             assetUrl = asset.url;
             cb.detail("Release " + rel.tag + " → " + asset.name);
-        }
-        File zip = new File(paths.cache, assetName);
-        String gotSha = Downloader.download(assetUrl, zip, new Downloader.Progress() {
-            public void onProgress(long d, long t) {
-                cb.percent(t > 0 ? (float) d / t : 0f);
+            File zip = new File(paths.cache, assetName);
+            String gotSha = Downloader.download(assetUrl, zip, new Downloader.Progress() {
+                public void onProgress(long d, long t) {
+                    cb.percent(t > 0 ? (float) d / t : 0f);
+                }
+            });
+            if (expectedSha != null && expectedSha.length() == 64
+                    && !gotSha.equalsIgnoreCase(expectedSha)) {
+                zip.delete();
+                throw new Exception("SHA-256 mismatch:\nexpected " + expectedSha + "\ngot      " + gotSha);
             }
-        });
-        if (expectedSha != null && expectedSha.length() == 64
-                && !gotSha.equalsIgnoreCase(expectedSha)) {
+            checkCancel();
+            stage(9, "Extracting Apace");
+            Paths.mkdirs(paths.current);
+            ZipExtractor.extractZipFile(zip, paths.current, true, new ZipExtractor.Progress() {
+                public void onEntry(String name, long soFar) { cb.percent(0.9f); }
+            });
             zip.delete();
-            throw new Exception("SHA-256 mismatch:\nexpected " + expectedSha + "\ngot      " + gotSha);
         }
-        checkCancel();
-        stage(9, "Extracting Apace");
-        Paths.mkdirs(paths.current);
-        ZipExtractor.extractZipFile(zip, paths.current, true, new ZipExtractor.Progress() {
-            public void onEntry(String name, long soFar) { cb.percent(0.9f); }
-        });
-        zip.delete();
 
         // ── 10. Konfiguracja + smoke test ──────────────────────────────────
         stage(10, "Configuration and smoke test");

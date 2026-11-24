@@ -28,9 +28,9 @@
 
 | Step | What happens |
 |---|---|
-| First run | Pick the channel: **Main** (stable, Apace GitHub Releases) or **Dev** (the rolling [`dev-build`](https://github.com/KotPasztet/Apace/releases/tag/dev-build) prerelease from the Apace `dev` branch — run *Developer Build* in the Apace repo once; nothing to paste) |
+| First run | Pick the channel: **Main** (stable, Apace GitHub Releases) or **Dev** (the latest dev build, pulled anonymously from the OCI image `ghcr.io/kotpasztet/apace:dev` — the same image `docker-compose.dev.yml` uses; only the `/app` layer, ~120 MB; nothing to paste) |
 | Install | 10 stages: PRoot → Ubuntu ARM64 → libraries → Java 17 → .NET 10 → Apace → smoke test, with a live console |
-| Daily use | The server **auto-starts** when you open the app ("Apace loading…" spinner), then the panel fills the whole screen |
+| Daily use | The server **auto-starts** when you open the app ("Apace loading…" spinner), then the panel fills the whole screen. When the app stays closed for 2+ minutes and the Java server is off, the server **auto-stops** to save battery (and auto-starts again on reopen) |
 | In the panel | Android **Back** opens the app menu: Stop / Console / Backup / Restore / Update / Settings / Licenses |
 
 Ports: `5000/tcp` panel · `1808/tcp` ApiPort · `19132/udp` Bedrock.

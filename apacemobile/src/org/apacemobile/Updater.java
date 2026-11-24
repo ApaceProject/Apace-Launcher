@@ -11,8 +11,8 @@ import java.util.List;
 
 /**
  * Aktualizacje Apace (specyfikacja 7): kanał Stable = GitHub Releases,
- * kanał Dev = oficjalny rolling prerelease „dev-build” z brancha dev Apace
- * (workflow development.yml). Dane użytkownika są chronione
+ * kanał Dev = najnowszy obraz ghcr.io/kotpasztet/apace:dev (anonimowy pull OCI,
+ * tylko warstwa /app — jak docker-compose.dev.yml). Dane użytkownika są chronione
  * przez te same wykluczenia co instalator; przed podmianą plików tworzony
  * jest pełny backup przez RENAME (natychmiastowy), z rollbackiem przy błędzie.
  */
@@ -49,11 +49,10 @@ public final class Updater {
         r.current = InstallerEngine.readVersion(paths);
         try {
             if ("main".equals(prefs.channel())) {
-                GitHubApi.Release rel = GitHubApi.releaseByTag(GitHubApi.DEV_TAG);
-                GitHubApi.Asset a = GitHubApi.pickDevArm64Asset(rel);
-                r.latest = a != null && a.updated != null ? a.updated : rel.tag;
-                if (a != null) r.assetUrl = a.url;
-                r.message = "Source: official dev-build release (Apace dev branch)";
+                GitHubApi.DevBuild dev = GitHubApi.latestDevBuild();
+                r.latest = dev.version;
+                r.assetUrl = "ghcr-blob:" + dev.layerDigest;
+                r.message = "Source: ghcr.io/kotpasztet/apace:dev (dev image — same as docker-compose.dev.yml)";
             } else {
                 GitHubApi.Release rel = GitHubApi.latestRelease();
                 GitHubApi.Asset a = GitHubApi.pickArm64Asset(rel);
@@ -87,27 +86,43 @@ public final class Updater {
         try {
             // 2. Pobranie nowej wersji do katalogu tymczasowego
             cb.phase("Downloading " + version);
-            File zip = new File(paths.cache, "apace-update-" + System.currentTimeMillis() + ".zip");
-            String gotSha = Downloader.download(assetUrl, zip, new Downloader.Progress() {
-                public void onProgress(long d, long t) { cb.percent(t > 0 ? (float) d / t : 0f); }
-            });
-            if (sha256 != null && sha256.length() == 64) {
-                String real = Downloader.sha256(zip);
-                if (!real.equalsIgnoreCase(sha256)) {
-                    zip.delete();
-                    throw new Exception("SHA-256 mismatch:\nexpected " + sha256 + "\ngot      " + real);
-                }
-                cb.phase("SHA-256 OK");
+            boolean ghcrLayer = assetUrl.startsWith("ghcr-blob:");
+            File zip = new File(paths.cache, "apace-update-" + System.currentTimeMillis()
+                    + (ghcrLayer ? ".tgz" : ".zip"));
+            if (ghcrLayer) {
+                // Dev: warstwa OCI z ghcr.io (świeży anonimowy token w momencie pobrania)
+                Downloader.download(GitHubApi.ghcrBlobUrl(assetUrl.substring("ghcr-blob:".length())),
+                        zip, new Downloader.Progress() {
+                            public void onProgress(long d, long t) { cb.percent(t > 0 ? (float) d / t : 0f); }
+                        }, GitHubApi.ghcrToken());
             } else {
-                cb.phase("Package SHA-256: " + gotSha.substring(0, 16) + "… (compare with the release page)");
+                String gotSha = Downloader.download(assetUrl, zip, new Downloader.Progress() {
+                    public void onProgress(long d, long t) { cb.percent(t > 0 ? (float) d / t : 0f); }
+                });
+                if (sha256 != null && sha256.length() == 64) {
+                    String real = Downloader.sha256(zip);
+                    if (!real.equalsIgnoreCase(sha256)) {
+                        zip.delete();
+                        throw new Exception("SHA-256 mismatch:\nexpected " + sha256 + "\ngot      " + real);
+                    }
+                    cb.phase("SHA-256 OK");
+                } else {
+                    cb.phase("Package SHA-256: " + gotSha.substring(0, 16) + "… (compare with the release page)");
+                }
             }
 
             // 3. Podmiana plików programu (wykluczenia danych — jak install-termux.sh)
             cb.phase("Extracting the new version");
             Paths.mkdirs(paths.current);
-            ZipExtractor.extractZipFile(zip, paths.current, true, new ZipExtractor.Progress() {
-                public void onEntry(String name, long soFar) { cb.percent(0.95f); }
-            });
+            if (ghcrLayer) {
+                TarExtractor.extractTarGz(zip, paths.current, "app/", new TarExtractor.Progress() {
+                    public void onEntry(String name, long soFar) { cb.percent(0.95f); }
+                });
+            } else {
+                ZipExtractor.extractZipFile(zip, paths.current, true, new ZipExtractor.Progress() {
+                    public void onEntry(String name, long soFar) { cb.percent(0.95f); }
+                });
+            }
             zip.delete();
 
             // 4. Przywrócenie danych użytkownika z backupu

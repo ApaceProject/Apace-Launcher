@@ -59,6 +59,17 @@ public class ApaceService extends Service {
     private volatile boolean installCancelled = false;
     private InstallerEngine installer;
 
+    // ── Auto-stop oszczędnościowy ──────────────────────────────────────────
+    /** Ostatnia widoczność MainActivity (onStart) — licznik bezczynności apki. */
+    private static volatile long lastAppVisibleAt = System.currentTimeMillis();
+    private static final long IDLE_STOP_MS = 2 * 60 * 1000L;
+    private static final long IDLE_CHECK_MS = 30 * 1000L;
+    private final Handler idleHandler = new Handler(Looper.getMainLooper());
+    private final Runnable idleCheck = new Runnable() { public void run() {
+        try { autoStopIfIdle(); } catch (Exception ignore) {}
+        idleHandler.postDelayed(this, IDLE_CHECK_MS);
+    }};
+
     public static State state() { return state; }
     public static String lastError() { return lastError; }
 
@@ -112,6 +123,7 @@ public class ApaceService extends Service {
         nm.createNotificationChannel(new NotificationChannel(CH_PROGRESS,
                 "Install & updates", NotificationManager.IMPORTANCE_LOW));
         startForeground(1, buildNotification(state));
+        idleHandler.postDelayed(idleCheck, IDLE_CHECK_MS);
     }
 
     @Override
@@ -293,6 +305,27 @@ public class ApaceService extends Service {
         }}.start();
     }
 
+    /** MainActivity woła w onStart — każde otwarcie apki resetuje licznik idle. */
+    public static void noteAppVisible() {
+        lastAppVisibleAt = System.currentTimeMillis();
+    }
+
+    /**
+     * Po 2 min z zamkniętą apką zatrzymaj serwer panelu (PRoot + .NET z panelem
+     * Solace), żeby nie marnował baterii — ale TYLKO gdy serwer Java (Minecraft)
+     * nie działa i nikt z zewnątrz nie jest połączony (Minecraft Earth / klienci
+     * gry / panel w LAN). Po ponownym otwarciu apka sama uruchamia serwer
+     * (MainActivity.onStart → ACTION_START).
+     */
+    private void autoStopIfIdle() {
+        if (state != ApaceService.State.RUNNING) return;
+        if (System.currentTimeMillis() - lastAppVisibleAt < IDLE_STOP_MS) return;
+        if (engine.javaServerRunning()) return;      // serwer Java ON → nigdy nie zatrzymuj
+        if (engine.hasExternalConnections()) return; // aktywny klient z zewnątrz → nie zatrzymuj
+        log("[mobile] Auto-stop: app closed for 2+ min, Java server off, no external clients — stopping to save battery");
+        beginStop();
+    }
+
     private void beginStopThenStart() {
         synchronized (LOCK) {
             if (state == ApaceService.State.RUNNING || state == ApaceService.State.STARTING) {
@@ -440,6 +473,7 @@ public class ApaceService extends Service {
 
     @Override
     public void onDestroy() {
+        idleHandler.removeCallbacksAndMessages(null);
         instance = null;
         releaseWakeLock();
         super.onDestroy();

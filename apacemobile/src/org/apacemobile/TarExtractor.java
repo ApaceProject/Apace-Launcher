@@ -20,11 +20,20 @@ public final class TarExtractor {
     private final InputStream raw;
     private final File destDir;
     private final Progress progress;
+    /** Opcjonalny filtr prefiksu (warstwy OCI): wycina tylko wpisy z tym prefiksem
+     *  i zdejmuje go (np. „app/" z obrazu dockera → zawartość /app do destDir). */
+    private final String onlyPrefix;
 
     public TarExtractor(InputStream in, boolean gzip, File destDir, Progress progress) throws Exception {
+        this(in, gzip, destDir, progress, null);
+    }
+
+    public TarExtractor(InputStream in, boolean gzip, File destDir, Progress progress,
+                        String onlyPrefix) throws Exception {
         this.raw = in;
         this.destDir = destDir;
         this.progress = progress;
+        this.onlyPrefix = onlyPrefix;
         stream = gzip ? new GZIPInputStream(in, 65536) : in;
     }
 
@@ -78,11 +87,24 @@ public final class TarExtractor {
                 name = pendingLongName;
                 pendingLongName = null;
             }
+            // absolutne ścieżki → względne (sanitize i tak odrzuci ".." — tar-slip)
+            if (name.startsWith("/")) name = name.substring(1);
 
             String clean = sanitize(name);
             if (clean == null) {
                 skipData(size);
                 continue; // odrzucona ścieżka (slip) — pomiń zawartość
+            }
+            if (onlyPrefix != null) {
+                if (!clean.startsWith(onlyPrefix)) {
+                    skipData(size);
+                    continue; // zawartość poza /app (java, dotnet, docker…) — pomijamy
+                }
+                clean = clean.substring(onlyPrefix.length());
+                if (clean.length() == 0) {
+                    skipData(size);
+                    continue; // sam katalog „app”
+                }
             }
 
             if ("5".equals(type)) {
@@ -261,9 +283,14 @@ public final class TarExtractor {
     }
 
     public static void extractTarGz(File tarGz, File destDir, Progress p) throws Exception {
+        extractTarGz(tarGz, destDir, null, p);
+    }
+
+    /** Warstwa OCI (tar.gz): tylko wpisy pod onlyPrefix (np. „app/”), bez tego prefiksu. */
+    public static void extractTarGz(File tarGz, File destDir, String onlyPrefix, Progress p) throws Exception {
         FileInputStream fin = new FileInputStream(tarGz);
         try {
-            new TarExtractor(fin, true, destDir, p).extract();
+            new TarExtractor(fin, true, destDir, p, onlyPrefix).extract();
         } finally {
             try { fin.close(); } catch (Exception ignore) {}
         }

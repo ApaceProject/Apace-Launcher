@@ -13,7 +13,7 @@
 Open the app → press **Install Apace**. Confirm. On the first install the app also asks for an **update channel**:
 
 - **Main — stable release (recommended)** — tracks the GitHub Releases of KotPasztet/Apace;
-- **Dev — official Apace dev build** — the rolling [`dev-build`](https://github.com/KotPasztet/Apace/releases/tag/dev-build) prerelease from the official `dev` branch (built by the *Developer Build* workflow in the Apace repo). Works out of the box — nothing to configure.
+- **Dev — latest dev build** — pulled anonymously from the OCI image `ghcr.io/kotpasztet/apace:dev` (the same image `docker-compose.dev.yml` uses; published by the *docker-image-dev* workflow on every push to `dev`). The app downloads only the `/app` layer (~120 MB) — Java and .NET come from its own environment. Version shown = short image digest. Works out of the box — nothing to configure.
 
 The installer then downloads (~2.5–3 GB in total, first run):
 
@@ -77,4 +77,4 @@ Android deletes all app data on uninstall — including game worlds and accounts
 Menu **⋮ → Update Apace**:
 
 - **Main — stable release (recommended)** — the latest official Apace release (GitHub Releases). "Check for updates" → "Update". The server stops, makes a backup (rollback on error), replaces the program files (data preserved).
-- **Dev — official Apace dev build** — the latest asset from the official [`dev-build`](https://github.com/KotPasztet/Apace/releases/tag/dev-build) prerelease (Apace `dev` branch). "Check for updates" → "Update" — same backup/rollback flow as Main.
+- **Dev — latest dev build** — the newest `ghcr.io/kotpasztet/apace:dev` image (version = short image digest). "Check for updates" → "Update" — same backup/rollback flow as Main.

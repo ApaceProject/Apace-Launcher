@@ -117,6 +117,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
+        ApaceService.noteAppVisible(); // reset licznika idle auto-stopu
         IntentFilter f = new IntentFilter();
         f.addAction(ApaceService.ACTION_STATE);
         f.addAction(ApaceService.ACTION_LOG);

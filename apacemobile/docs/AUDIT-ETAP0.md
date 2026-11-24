@@ -59,7 +59,7 @@ Wykluczenia z `unzip -o`: `launcher/Data/*`, `launcher/logs/*`, `launcher/persis
 ## 7. Kanały aktualizacji
 
 - **Stable**: GitHub Releases (`api.github.com/repos/KotPasztet/Apace/releases/latest`) — dokładnie jak w `install-termux.sh` (pobiera tylko oficjalne Release, nie gałąź main). Asset select: `Apace-termux-arm64.zip` → fallback `Apace-linux-arm64.zip`.
-- **Dev**: oficjalny rolling prerelease [`dev-build`](https://github.com/KotPasztet/Apace/releases/tag/dev-build) z brancha `dev` Apace (`api.github.com/repos/KotPasztet/Apace/releases/tags/dev-build`, workflow `development.yml`). Asset: `Apace-Dev-linux-arm64.zip`. Działa bez konfiguracji — brak SHA-256 w manifeście, więc sumy kontrolnej się nie weryfikuje (SHA pakietu pokazywany w logu).
+- **Dev**: obraz `ghcr.io/kotpasztet/apace:dev` — anonimowy pull OCI, dokładnie ten sam mechanizm co `docker-compose.dev.yml` (obraz publikuje workflow `docker-image-dev.yml` przy każdym pushu do `dev`). Apka: token anonimowy ghcr → index (multi-arch, wybór linux/arm64) → config/history → warstwa `COPY /src/build/Release/latest/` (zawartość `/app`, ~120 MB, layout identyczny jak zip framework-dependent). Ekstrakcja `TarExtractor` z filtrem prefiksu `app/` (zweryfikowana na realnej warstwie 2026-11-24: 1133 plików, tylko `app/**`, bit +x zachowany). Wersja = krótki digest indexu (12 hex, zmienia się przy każdym pushu). SHA-256 warstwy dotyczy tar przed gzip — nie weryfikowany (SHA pobranego pliku w logu).
 
 ## 8. PRoot na Androidzie (środowisko)
 
