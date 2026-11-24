@@ -143,7 +143,13 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onStop() {
-        ApaceService.noteAppHidden(); // apka schodzi z ekranu — start licznika idle
+        // Strona patchera otwarta? Patch działa kilkanaście minut — auto-stop
+        // zabijałby serwer w trakcie joba (na desktopie serwer nigdy nie jest
+        // zatrzymywany, więc to był mobile-only failure).
+        CharSequence url = webView != null ? webView.getUrl() : null;
+        boolean patcherOpen = url != null
+                && url.toString().toLowerCase(java.util.Locale.ROOT).contains("/patcher");
+        ApaceService.noteAppHidden(patcherOpen);
         unregisterReceiver(recv);
         super.onStop();
     }

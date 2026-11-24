@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.apacemobile"
-    android:versionCode="4"
-    android:versionName="1.1.2">
+    android:versionCode="5"
+    android:versionName="1.1.3">
 
     <!-- targetSdk 28 — świadoma decyzja (jak Termux): od Androida 10 (API 29)
          SELinux W^X blokuje exec() plików z katalogu aplikacji dla targetSdk >= 29,

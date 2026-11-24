@@ -360,14 +360,27 @@ public class ApaceService extends Service {
     /** MainActivity onStart — apka otwarta: auto-stop wyłączony, licznik wyzerowany. */
     public static void noteAppVisible() {
         appInForeground = true;
+        keepServerWhileHidden = false;
         lastAppVisibleAt = System.currentTimeMillis();
     }
 
     /** MainActivity onStop — apka już niewidoczna: dopiero teraz startuje licznik. */
     public static void noteAppHidden() {
+        noteAppHidden(false);
+    }
+
+    /**
+     * Wariant z „busy page": gdy w momencie chowania apki WebView był na stronie
+     * patchera (/Patcher), nie zatrzymujemy serwera podczas tej nieobecności —
+     * patch joba działa kilkanaście minut i śmierć procesu przerywa go bezpowrotnie.
+     */
+    public static void noteAppHidden(boolean keepWhileHidden) {
         appInForeground = false;
+        keepServerWhileHidden = keepWhileHidden;
         lastAppVisibleAt = System.currentTimeMillis();
     }
+
+    private static volatile boolean keepServerWhileHidden = false;
 
     /**
      * Po 5 min z zamkniętą apką zatrzymaj serwer panelu (PRoot + .NET z panelem
@@ -380,6 +393,7 @@ public class ApaceService extends Service {
     private void autoStopIfIdle() {
         if (state != ApaceService.State.RUNNING) return;
         if (appInForeground) return;                 // apka otwarta → nigdy nie zatrzymuj
+        if (keepServerWhileHidden) return;           // strona patchera była otwarta → job może trwać
         if (System.currentTimeMillis() - lastAppVisibleAt < IDLE_STOP_MS) return;
         if (engine.javaServerRunning()) return;      // serwer gry działa w tle → nigdy
         if (engine.hasExternalConnections()) return; // aktywny klient z zewnątrz → nie zatrzymuj
