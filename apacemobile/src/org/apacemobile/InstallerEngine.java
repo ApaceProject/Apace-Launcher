@@ -155,22 +155,22 @@ public final class InstallerEngine {
         stage(8, "Downloading .NET 10 ASP.NET Core Runtime (~100 MB)");
         installDotnet();
 
-        // ── 9. Pliki Apace (Main = GitHub Releases, Dev = manifest CI) ─────
+        // ── 9. Pliki Apace (Main = GitHub Releases, Dev = oficjalny dev-build) ─
         String channel = prefs.channel();
         String tag; String assetName; String assetUrl; String expectedSha = null;
         if ("main".equals(channel)) {
-            stage(9, "Downloading Apace (Dev channel — CI manifest)");
-            String mu = prefs.mainManifestUrl();
-            if (mu == null || mu.length() == 0) {
-                throw new Exception("Dev channel selected, but the CI manifest URL is empty. " +
-                        "Set it in ⋮ → Update Apace (docs/main-channel.yml has the workflow).");
+            stage(9, "Downloading Apace (Dev channel — official dev branch build)");
+            GitHubApi.Release devRel = GitHubApi.releaseByTag(GitHubApi.DEV_TAG);
+            GitHubApi.Asset devAsset = GitHubApi.pickDevArm64Asset(devRel);
+            if (devAsset == null) {
+                throw new Exception("No Apace-Dev-linux-arm64.zip asset in the \""
+                        + GitHubApi.DEV_TAG + "\" release (run the Developer Build "
+                        + "workflow in the Apace repo).");
             }
-            GitHubApi.Manifest m = GitHubApi.fetchManifest(mu);
-            tag = m.version;
-            assetName = "apace-dev-" + tag + ".zip";
-            assetUrl = m.url;
-            expectedSha = m.sha256;
-            cb.detail("Dev manifest → " + tag);
+            tag = devAsset.updated != null ? devAsset.updated : devRel.tag;
+            assetName = devAsset.name;
+            assetUrl = devAsset.url;
+            cb.detail("dev-build @ " + tag);
         } else {
             stage(9, "Downloading Apace (Main channel — GitHub Releases)");
             GitHubApi.Release rel = GitHubApi.latestRelease();

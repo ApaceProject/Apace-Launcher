@@ -34,13 +34,9 @@ public final class Prefs {
     public int heapMb() { return sp.getInt("heap_mb", 512); }
     public void heapMb(int v) { sp.edit().putInt("heap_mb", v).apply(); }
 
-    /** "stable" (GitHub Releases) albo "main" (manifest CI z pola mainManifestUrl). */
+    /** "stable" (GitHub Releases) albo "main" (oficjalny dev-build z brancha dev Apace). */
     public String channel() { return sp.getString("channel", "stable"); }
     public void channel(String v) { sp.edit().putString("channel", v).apply(); }
-
-    /** URL manifestu JSON {version,url,sha256} dla kanału Main. */
-    public String mainManifestUrl() { return sp.getString("main_manifest_url", ""); }
-    public void mainManifestUrl(String v) { sp.edit().putString("main_manifest_url", v).apply(); }
 
     /** Start serwera po bootowaniu urządzenia (domyślnie wyłączony). */
     public boolean autoStart() { return sp.getBoolean("auto_start", false); }

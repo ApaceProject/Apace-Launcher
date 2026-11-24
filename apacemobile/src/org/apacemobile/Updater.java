@@ -11,7 +11,8 @@ import java.util.List;
 
 /**
  * Aktualizacje Apace (specyfikacja 7): kanał Stable = GitHub Releases,
- * kanał Main = manifest JSON z własnego CI. Dane użytkownika są chronione
+ * kanał Dev = oficjalny rolling prerelease „dev-build” z brancha dev Apace
+ * (workflow development.yml). Dane użytkownika są chronione
  * przez te same wykluczenia co instalator; przed podmianą plików tworzony
  * jest pełny backup przez RENAME (natychmiastowy), z rollbackiem przy błędzie.
  */
@@ -48,17 +49,11 @@ public final class Updater {
         r.current = InstallerEngine.readVersion(paths);
         try {
             if ("main".equals(prefs.channel())) {
-                String url = prefs.mainManifestUrl();
-                if (url == null || url.length() == 0) {
-                    r.message = "The Dev channel needs the CI manifest URL (⋮ → Update Apace). " +
-                            "The workflow that generates the manifest: docs/main-channel.yml";
-                    r.latest = "?";
-                    return r;
-                }
-                GitHubApi.Manifest m = GitHubApi.fetchManifest(url);
-                r.latest = m.version;
-                r.assetUrl = m.url;
-                r.sha256 = m.sha256;
+                GitHubApi.Release rel = GitHubApi.releaseByTag(GitHubApi.DEV_TAG);
+                GitHubApi.Asset a = GitHubApi.pickDevArm64Asset(rel);
+                r.latest = a != null && a.updated != null ? a.updated : rel.tag;
+                if (a != null) r.assetUrl = a.url;
+                r.message = "Source: official dev-build release (Apace dev branch)";
             } else {
                 GitHubApi.Release rel = GitHubApi.latestRelease();
                 GitHubApi.Asset a = GitHubApi.pickArm64Asset(rel);

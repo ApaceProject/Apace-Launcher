@@ -59,7 +59,7 @@ Wykluczenia z `unzip -o`: `launcher/Data/*`, `launcher/logs/*`, `launcher/persis
 ## 7. Kanały aktualizacji
 
 - **Stable**: GitHub Releases (`api.github.com/repos/KotPasztet/Apace/releases/latest`) — dokładnie jak w `install-termux.sh` (pobiera tylko oficjalne Release, nie gałąź main). Asset select: `Apace-termux-arm64.zip` → fallback `Apace-linux-arm64.zip`.
-- **Main**: wymaga własnego CI — dołączyliśmy gotowy workflow `docs/main-channel.yml` (build framework-dependent-linux-arm64 + sha256 + manifest JSON `{version,url,sha256}` na gałęzi `gh-pages`). Aplikacja: Ustawienia → URL manifestu → zakładka Aktualizacje → kanał Main. Suma SHA-256 weryfikowana przy pobieraniu (gdy podana w manifeście).
+- **Dev**: oficjalny rolling prerelease [`dev-build`](https://github.com/KotPasztet/Apace/releases/tag/dev-build) z brancha `dev` Apace (`api.github.com/repos/KotPasztet/Apace/releases/tags/dev-build`, workflow `development.yml`). Asset: `Apace-Dev-linux-arm64.zip`. Działa bez konfiguracji — brak SHA-256 w manifeście, więc sumy kontrolnej się nie weryfikuje (SHA pakietu pokazywany w logu).
 
 ## 8. PRoot na Androidzie (środowisko)
 

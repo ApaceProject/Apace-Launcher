@@ -19,9 +19,8 @@
 
 > [!TIP]
 > ### 📦 Download
-> - **[Latest release](https://github.com/KotPasztet/apace-launcher/releases/latest)** — tagged builds (`v*`)
-> - **[Latest build (main)](https://github.com/KotPasztet/apace-launcher/releases/tag/latest)** — a fresh `ApaceLauncher.apk` attached by GitHub Actions on **every** successful CI run
-> - Actions artifacts (`ApaceLauncher-apk`) are zip-wrapped by GitHub — the direct `.apk` is the release asset above
+> - **[Actions → Build APK](https://github.com/KotPasztet/apace-launcher/actions/workflows/build.yml)** — the latest run's **artifact `ApaceLauncher`** contains the APK (GitHub wraps it in a zip — unzip and install)
+> - **[Actions → Release APK](https://github.com/KotPasztet/apace-launcher/actions/workflows/release.yml)** — manual workflow: run it with a tag (e.g. `v1.1.0`) to publish a proper [Release](https://github.com/KotPasztet/apace-launcher/releases) with the `.apk` attached
 >
 > The APK is signed with the same key on every build, so it installs over an older version as a normal update.
 
@@ -29,7 +28,7 @@
 
 | Step | What happens |
 |---|---|
-| First run | Pick the channel: **Main** (stable, GitHub Releases) or **Dev** (CI manifest — the phone equivalent of switching `:main` ↔ `:dev` in docker-compose) |
+| First run | Pick the channel: **Main** (stable, Apace GitHub Releases) or **Dev** (the official Apace `dev` branch — the rolling [`dev-build`](https://github.com/KotPasztet/Apace/releases/tag/dev-build) prerelease, works out of the box, nothing to paste) |
 | Install | 10 stages: PRoot → Ubuntu ARM64 → libraries → Java 17 → .NET 10 → Apace → smoke test, with a live console |
 | Daily use | The server **auto-starts** when you open the app ("Apace loading…" spinner), then the panel fills the whole screen |
 | In the panel | Android **Back** opens the app menu: Stop / Console / Backup / Restore / Update / Settings / Licenses |
@@ -51,7 +50,7 @@ bash scripts/build_apk.sh
 
 - **Apace server:** [github.com/KotPasztet/Apace](https://github.com/KotPasztet/Apace)
 - **Discord:** [discord.gg/5K8HJukMSX](https://discord.gg/5K8HJukMSX)
-- Docs: [INSTALL.md](apacemobile/docs/INSTALL.md) · [BUILD.md](apacemobile/docs/BUILD.md) · [Dev manifest workflow](apacemobile/docs/main-channel.yml)
+- Docs: [INSTALL.md](apacemobile/docs/INSTALL.md) · [BUILD.md](apacemobile/docs/BUILD.md)
 
 ## Disclaimer
 

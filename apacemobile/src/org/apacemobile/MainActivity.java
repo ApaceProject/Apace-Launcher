@@ -68,7 +68,7 @@ public class MainActivity extends Activity {
     private static final int REQ_FILE_CHOOSER = 103;
 
     private static final int CH_MAIN = 0; // prefs "stable" — GitHub Releases
-    private static final int CH_DEV  = 1; // prefs "main"   — CI manifest
+    private static final int CH_DEV  = 1; // prefs "main"   — official dev-build release
 
     private Paths paths;
     private Prefs prefs;
@@ -328,12 +328,9 @@ public class MainActivity extends Activity {
         card.addView(label("CHANNEL"));
         final String[] chItems = {
                 "Main — stable release (recommended)",
-                "Dev — CI build (needs manifest URL)"
+                "Dev — official Apace dev build (dev branch)"
         };
         final int[] channelIdx = { CH_MAIN };
-        final LinearLayout devBox = new LinearLayout(this);
-        devBox.setOrientation(LinearLayout.VERTICAL);
-        devBox.setVisibility(View.GONE);
         final Button chBtn = mcButton(chItems[channelIdx[0]], false);
         chBtn.setAllCaps(false);
         chBtn.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
@@ -344,7 +341,6 @@ public class MainActivity extends Activity {
                         public void onClick(DialogInterface d, int w) {
                             channelIdx[0] = w;
                             chBtn.setText(chItems[w]);
-                            devBox.setVisibility(w == CH_DEV ? View.VISIBLE : View.GONE);
                             d.dismiss();
                         }
                     })
@@ -355,29 +351,11 @@ public class MainActivity extends Activity {
         blp.topMargin = dp(6);
         card.addView(chBtn, blp);
 
-        TextView manifestLabel = label("CI MANIFEST URL (DEV)");
-        manifestLabel.setPadding(0, dp(10), 0, 0);
-        devBox.addView(manifestLabel);
-        final EditText manifestUrl = field("https://<user>.github.io/<apace-fork>/main-manifest.json");
-        manifestUrl.setText(prefs.mainManifestUrl());
-        devBox.addView(manifestUrl, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        card.addView(devBox);
-
         Button install = mcButton("Install Apace", true);
         install.setTextSize(15);
         install.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
             String ch = channelIdx[0] == CH_DEV ? "main" : "stable";
             prefs.channel(ch);
-            if (channelIdx[0] == CH_DEV) {
-                String u = manifestUrl.getText().toString().trim();
-                if (u.length() == 0) {
-                    Toast.makeText(MainActivity.this,
-                            "The Dev channel needs a CI manifest URL", Toast.LENGTH_LONG).show();
-                    return;
-                }
-                prefs.mainManifestUrl(u);
-            }
             confirm("Install Apace?",
                     "The app will download the environment: Ubuntu ARM64, Java 17, .NET 10 "
                             + "and the latest Apace build (~3 GB). About 3.5 GB of free space is required.\n\n"
@@ -787,17 +765,9 @@ public class MainActivity extends Activity {
         box.setPadding(dp(20), dp(12), dp(20), 0);
         String cur = InstallerEngine.readVersion(paths);
         TextView info = text("Installed: " + (cur != null ? cur : "—")
-                        + "\nChannel: " + ("main".equals(prefs.channel()) ? "Dev (CI)" : "Main (stable)"),
+                        + "\nChannel: " + ("main".equals(prefs.channel()) ? "Dev (dev-build)" : "Main (stable)"),
                 C_TEXT, 13, false);
         box.addView(info);
-
-        TextView ml = label("CI MANIFEST URL (DEV CHANNEL)");
-        ml.setPadding(0, dp(14), 0, 0);
-        box.addView(ml);
-        final EditText manifestUrl = field("https://<user>.github.io/<apace-fork>/main-manifest.json");
-        manifestUrl.setText(prefs.mainManifestUrl());
-        box.addView(manifestUrl, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         final TextView result = text("", C_DIM, 12, false);
         result.setPadding(0, dp(10), 0, 0);
@@ -824,7 +794,6 @@ public class MainActivity extends Activity {
         clp.setMargins(0, dp(12), 0, dp(12));
         box.addView(check, clp);
         check.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
-            prefs.mainManifestUrl(manifestUrl.getText().toString().trim());
             result.setText("Checking…");
             new Thread() { public void run() {
                 final Updater.CheckResult r = new Updater(MainActivity.this, prefs, paths, null).check();

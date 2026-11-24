@@ -14,10 +14,15 @@ public final class GitHubApi {
 
     public static final String REPO = "KotPasztet/Apace";
 
+    /** Oficjalny build gałęzi dev Apace — rolling prerelease „dev-build”
+     *  publikowany przez workflow development.yml (Developer Build) w repo Apace. */
+    public static final String DEV_TAG = "dev-build";
+
     public static class Asset {
         public String name;
         public String url;
         public long size;
+        public String updated; // updated_at (ISO) — zmienia się przy każdej podmianie assetu
     }
 
     public static class Release {
@@ -26,11 +31,24 @@ public final class GitHubApi {
         public List<Asset> assets = new ArrayList<Asset>();
     }
 
+    /** Najnowszy stabilny release (releases/latest pomija prereleases). */
     public static Release latestRelease() throws Exception {
-        java.net.HttpURLConnection c = Downloader.open(
-                "https://api.github.com/repos/" + REPO + "/releases/latest");
+        return releaseByApiUrl("https://api.github.com/repos/" + REPO + "/releases/latest");
+    }
+
+    /** Release po tagu (także prerelease) — kanał Dev używa rolling release „dev-build”. */
+    public static Release releaseByTag(String tag) throws Exception {
+        return releaseByApiUrl("https://api.github.com/repos/" + REPO + "/releases/tags/" + tag);
+    }
+
+    private static Release releaseByApiUrl(String apiUrl) throws Exception {
+        java.net.HttpURLConnection c = Downloader.open(apiUrl);
         c.setRequestProperty("Accept", "application/vnd.github+json");
         int code = c.getResponseCode();
+        if (code == 404 && apiUrl.contains("/tags/")) {
+            throw new Exception("No \"dev-build\" release yet — run the Developer Build "
+                    + "workflow in the Apace repo (dev branch) first.");
+        }
         if (code == 403) {
             throw new Exception("GitHub API rate limit exhausted (403) — try again later.");
         }
@@ -38,6 +56,13 @@ public final class GitHubApi {
             throw new Exception("GitHub API HTTP " + code);
         }
         JsonReader r = new JsonReader(new InputStreamReader(c.getInputStream(), "UTF-8"));
+        Release rel = parseRelease(r);
+        r.close();
+        if (rel.tag == null) throw new Exception("GitHub API response without tag_name");
+        return rel;
+    }
+
+    private static Release parseRelease(JsonReader r) throws Exception {
         Release rel = new Release();
         r.beginObject();
         while (r.hasNext()) {
@@ -59,6 +84,8 @@ public final class GitHubApi {
                             a.url = r.nextString();
                         } else if ("size".equals(k2)) {
                             a.size = r.nextLong();
+                        } else if ("updated_at".equals(k2)) {
+                            a.updated = r.nextString();
                         } else {
                             r.skipValue();
                         }
@@ -72,8 +99,6 @@ public final class GitHubApi {
             }
         }
         r.endObject();
-        r.close();
-        if (rel.tag == null) throw new Exception("GitHub API response without tag_name");
         return rel;
     }
 
@@ -93,34 +118,12 @@ public final class GitHubApi {
         return null;
     }
 
-    /**
-     * Kanał "Main": manifest JSON {version, url, sha256} wystawiany przez własny
-     * workflow CI (dokumentacja: docs/main-channel.yml). Bez URL-a kanał jest
-     * niedostępny — aplikacja informuje użytkownika.
-     */
-    public static class Manifest {
-        public String version;
-        public String url;
-        public String sha256;
-    }
-
-    public static Manifest fetchManifest(String manifestUrl) throws Exception {
-        java.net.HttpURLConnection c = Downloader.open(manifestUrl);
-        int code = c.getResponseCode();
-        if (code != 200) throw new Exception("Dev channel manifest: HTTP " + code);
-        JsonReader r = new JsonReader(new InputStreamReader(c.getInputStream(), "UTF-8"));
-        Manifest m = new Manifest();
-        r.beginObject();
-        while (r.hasNext()) {
-            String k = r.nextName();
-            if ("version".equals(k)) m.version = r.nextString();
-            else if ("url".equals(k)) m.url = r.nextString();
-            else if ("sha256".equals(k)) m.sha256 = r.nextString();
-            else r.skipValue();
+    /** Asset linux-arm64 z rolling release „dev-build” (Apace-Dev-linux-arm64.zip). */
+    public static Asset pickDevArm64Asset(Release rel) {
+        for (Asset a : rel.assets) {
+            String n = a.name.toLowerCase();
+            if (n.startsWith("apace-dev-linux-arm64") && n.endsWith(".zip")) return a;
         }
-        r.endObject();
-        r.close();
-        if (m.url == null) throw new Exception("Dev channel manifest without a url field");
-        return m;
+        return null;
     }
 }

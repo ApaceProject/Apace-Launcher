@@ -13,7 +13,7 @@
 Open the app → press **Install Apace**. Confirm. On the first install the app also asks for an **update channel**:
 
 - **Main — stable release (recommended)** — tracks the GitHub Releases of KotPasztet/Apace;
-- **Dev — CI build** — requires a CI manifest URL (see [`main-channel.yml`](main-channel.yml) — run the workflow in your fork of Apace).
+- **Dev — official Apace dev build** — the rolling [`dev-build`](https://github.com/KotPasztet/Apace/releases/tag/dev-build) prerelease from the official `dev` branch (built by the *Developer Build* workflow in the Apace repo). Works out of the box — nothing to configure.
 
 The installer then downloads (~2.5–3 GB in total, first run):
 
@@ -77,4 +77,4 @@ Android deletes all app data on uninstall — including game worlds and accounts
 Menu **⋮ → Update Apace**:
 
 - **Main — stable release (recommended)** — the latest official Apace release (GitHub Releases). "Check for updates" → "Update". The server stops, makes a backup (rollback on error), replaces the program files (data preserved).
-- **Dev — CI build** — the latest build from your CI. Paste the JSON manifest URL into the "CI manifest" field; the workflow: [`docs/main-channel.yml`](main-channel.yml) — run it in your fork of Apace.
+- **Dev — official Apace dev build** — the latest asset from the official [`dev-build`](https://github.com/KotPasztet/Apace/releases/tag/dev-build) prerelease (Apace `dev` branch). "Check for updates" → "Update" — same backup/rollback flow as Main.
