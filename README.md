@@ -30,7 +30,7 @@
 |---|---|
 | First run | Pick the channel: **Main** (stable, Apace GitHub Releases) or **Dev** (the latest dev build, pulled anonymously from the OCI image `ghcr.io/kotpasztet/apace:dev` — the same image `docker-compose.dev.yml` uses; only the `/app` layer, ~120 MB; nothing to paste) |
 | Install | 10 stages: PRoot → Ubuntu ARM64 → libraries → Java 17 → .NET 10 → Apace → smoke test, with a live console |
-| Daily use | The server **auto-starts** when you open the app ("Apace loading…" spinner), then the panel fills the whole screen. When the app stays closed for 2+ minutes and the Java server is off, the server **auto-stops** to save battery (and auto-starts again on reopen) |
+| Daily use | The server **auto-starts** when you open the app ("Apace loading…" spinner), then the panel fills the whole screen. When the app is not open for 5 minutes and the game server is off, the server **auto-stops** to save battery (notification says "battery saving"; auto-starts again on reopen) |
 | In the panel | Android **Back** opens the app menu: Stop / Console / Backup / Restore / Update / Settings / Licenses |
 
 Ports: `5000/tcp` panel · `1808/tcp` ApiPort · `19132/udp` Bedrock.

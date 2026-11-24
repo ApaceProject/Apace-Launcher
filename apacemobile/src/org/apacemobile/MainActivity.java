@@ -135,6 +135,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onStop() {
+        ApaceService.noteAppHidden(); // apka schodzi z ekranu — start licznika idle
         unregisterReceiver(recv);
         super.onStop();
     }

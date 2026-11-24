@@ -60,9 +60,11 @@ public class ApaceService extends Service {
     private InstallerEngine installer;
 
     // ── Auto-stop oszczędnościowy ──────────────────────────────────────────
-    /** Ostatnia widoczność MainActivity (onStart) — licznik bezczynności apki. */
+    /** Czy MainActivity jest teraz widoczna (między onStart a onStop). */
+    private static volatile boolean appInForeground = true;
+    /** Moment ostatniej widoczności apki / moment zejścia z pierwszego planu. */
     private static volatile long lastAppVisibleAt = System.currentTimeMillis();
-    private static final long IDLE_STOP_MS = 2 * 60 * 1000L;
+    private static final long IDLE_STOP_MS = 5 * 60 * 1000L;
     private static final long IDLE_CHECK_MS = 30 * 1000L;
     private final Handler idleHandler = new Handler(Looper.getMainLooper());
     private final Runnable idleCheck = new Runnable() { public void run() {
@@ -289,11 +291,17 @@ public class ApaceService extends Service {
     // ── Stop / Restart ─────────────────────────────────────────────────────
 
     private void beginStop() {
+        beginStop(null);
+    }
+
+    private void beginStop(String reason) {
         synchronized (LOCK) {
             if (state == ApaceService.State.STOPPING) return;
             state = ApaceService.State.STOPPING;
         }
-        updateNotification("Stopping Apace…");
+        updateNotification(reason == null
+                ? "Stopping Apace…"
+                : "Stopping Apace… (" + reason + ")");
         final PRoot.LogSink sink = new PRoot.LogSink() {
             public void onLine(String line) { log(line); }
         };
@@ -305,25 +313,34 @@ public class ApaceService extends Service {
         }}.start();
     }
 
-    /** MainActivity woła w onStart — każde otwarcie apki resetuje licznik idle. */
+    /** MainActivity onStart — apka otwarta: auto-stop wyłączony, licznik wyzerowany. */
     public static void noteAppVisible() {
+        appInForeground = true;
+        lastAppVisibleAt = System.currentTimeMillis();
+    }
+
+    /** MainActivity onStop — apka już niewidoczna: dopiero teraz startuje licznik. */
+    public static void noteAppHidden() {
+        appInForeground = false;
         lastAppVisibleAt = System.currentTimeMillis();
     }
 
     /**
-     * Po 2 min z zamkniętą apką zatrzymaj serwer panelu (PRoot + .NET z panelem
-     * Solace), żeby nie marnował baterii — ale TYLKO gdy serwer Java (Minecraft)
-     * nie działa i nikt z zewnątrz nie jest połączony (Minecraft Earth / klienci
-     * gry / panel w LAN). Po ponownym otwarciu apka sama uruchamia serwer
-     * (MainActivity.onStart → ACTION_START).
+     * Po 5 min z zamkniętą apką zatrzymaj serwer panelu (PRoot + .NET z panelem
+     * Solace), żeby nie marnował baterii. Zatrzymanie NIGDY nie następuje, gdy
+     * apka jest otwarta (pierwszy plan), ani gdy serwer gry (JVM Minecraft)
+     * działa w tle, ani gdy ktoś z zewnątrz jest połączony (Minecraft Earth /
+     * klienci gry / panel w LAN). Po ponownym otwarciu apka sama uruchamia
+     * serwer (MainActivity.onStart → ACTION_START).
      */
     private void autoStopIfIdle() {
         if (state != ApaceService.State.RUNNING) return;
+        if (appInForeground) return;                 // apka otwarta → nigdy nie zatrzymuj
         if (System.currentTimeMillis() - lastAppVisibleAt < IDLE_STOP_MS) return;
-        if (engine.javaServerRunning()) return;      // serwer Java ON → nigdy nie zatrzymuj
+        if (engine.javaServerRunning()) return;      // serwer gry działa w tle → nigdy
         if (engine.hasExternalConnections()) return; // aktywny klient z zewnątrz → nie zatrzymuj
-        log("[mobile] Auto-stop: app closed for 2+ min, Java server off, no external clients — stopping to save battery");
-        beginStop();
+        log("[mobile] Auto-stop: app closed for 5+ min, Java server off, no external clients — stopping to save battery");
+        beginStop("battery saving");
     }
 
     private void beginStopThenStart() {
