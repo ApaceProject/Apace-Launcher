@@ -1,4 +1,4 @@
-package org.apacemobile;
+package com.kotpasztet.apacelauncher;
 
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -34,8 +34,21 @@ public final class Prefs {
     public int heapMb() { return sp.getInt("heap_mb", 512); }
     public void heapMb(int v) { sp.edit().putInt("heap_mb", v).apply(); }
 
-    /** "stable" (GitHub Releases) albo "main" (oficjalny dev-build z brancha dev Apace). */
-    public String channel() { return sp.getString("channel", "stable"); }
+    /**
+     * Kanał aktualizacji Apace: "main" = GitHub Releases (stabilny),
+     * "dev" = obraz ghcr.io/kotpasztet/apace:dev (build z brancha dev).
+     * Migracja starych wartości ("stable"→"main", stare "main"=dev-build→"dev").
+     */
+    public String channel() {
+        String v = sp.getString("channel", null);
+        if (!sp.getBoolean("channel_migrated", false)) {
+            if ("stable".equals(v)) v = "main";   // stary kanał stabilny → main (releases)
+            else if ("main".equals(v)) v = "dev"; // stare "main" oznaczało dev-build → dev
+            else if (v == null) v = "main";       // domyślnie: main (releases)
+            sp.edit().putString("channel", v).putBoolean("channel_migrated", true).apply();
+        }
+        return v == null ? "main" : v;
+    }
     public void channel(String v) { sp.edit().putString("channel", v).apply(); }
 
     /** Start serwera po bootowaniu urządzenia (domyślnie wyłączony). */

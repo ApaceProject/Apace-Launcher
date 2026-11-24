@@ -1,4 +1,4 @@
-package org.apacemobile;
+package com.kotpasztet.apacelauncher;
 
 import java.util.ArrayDeque;
 import java.util.Iterator;

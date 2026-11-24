@@ -1,4 +1,4 @@
-package org.apacemobile;
+package com.kotpasztet.apacelauncher;
 
 import android.app.Application;
 import android.content.Context;

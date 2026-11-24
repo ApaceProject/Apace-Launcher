@@ -1,4 +1,4 @@
-package org.apacemobile;
+package com.kotpasztet.apacelauncher;
 
 import android.content.Context;
 import android.content.Intent;
@@ -24,17 +24,17 @@ import android.os.PowerManager;
  */
 public class ApaceService extends Service {
 
-    public static final String ACTION_INSTALL = "org.apacemobile.INSTALL";
-    public static final String ACTION_CANCEL_INSTALL = "org.apacemobile.CANCEL_INSTALL";
-    public static final String ACTION_START = "org.apacemobile.START";
-    public static final String ACTION_STOP = "org.apacemobile.STOP";
-    public static final String ACTION_RESTART = "org.apacemobile.RESTART";
-    public static final String ACTION_UPDATE = "org.apacemobile.UPDATE";
+    public static final String ACTION_INSTALL = "com.kotpasztet.apacelauncher.INSTALL";
+    public static final String ACTION_CANCEL_INSTALL = "com.kotpasztet.apacelauncher.CANCEL_INSTALL";
+    public static final String ACTION_START = "com.kotpasztet.apacelauncher.START";
+    public static final String ACTION_STOP = "com.kotpasztet.apacelauncher.STOP";
+    public static final String ACTION_RESTART = "com.kotpasztet.apacelauncher.RESTART";
+    public static final String ACTION_UPDATE = "com.kotpasztet.apacelauncher.UPDATE";
 
-    public static final String ACTION_STATE = "org.apacemobile.STATE";
-    public static final String ACTION_LOG = "org.apacemobile.LOG";
-    public static final String ACTION_STATS = "org.apacemobile.STATS";
-    public static final String ACTION_INSTALL_PROGRESS = "org.apacemobile.INSTALL_PROGRESS";
+    public static final String ACTION_STATE = "com.kotpasztet.apacelauncher.STATE";
+    public static final String ACTION_LOG = "com.kotpasztet.apacelauncher.LOG";
+    public static final String ACTION_STATS = "com.kotpasztet.apacelauncher.STATS";
+    public static final String ACTION_INSTALL_PROGRESS = "com.kotpasztet.apacelauncher.INSTALL_PROGRESS";
 
     public static final String CH_STATUS = "apace_status";
     public static final String CH_PROGRESS = "apace_progress";

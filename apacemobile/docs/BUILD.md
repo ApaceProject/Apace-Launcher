@@ -26,7 +26,7 @@ All paths can be overridden with environment variables — `PROJ`, `JDK` (or `JA
 
 ## What `scripts/build_apk.sh` does
 
-1. **R.java** — `aapt package -f -m -J gen -M AndroidManifest.xml -S res -I android.jar` (generates `org.apacemobile.R` with `R.drawable.ic_stat`, `R.mipmap.ic_launcher`, `R.xml.network_security_config`).
+1. **R.java** — `aapt package -f -m -J gen -M AndroidManifest.xml -S res -I android.jar` (generates `com.kotpasztet.apacelauncher.R` with `R.drawable.ic_stat`, `R.mipmap.ic_launcher`, `R.xml.network_security_config`).
 2. **javac** — `javac -source 8 -target 8 -bootclasspath android.jar -classpath android.jar -d obj src/**/*.java gen/**/*.java` (without `-bootclasspath` javac warns; no `--release` so API 26+ stays available).
 3. **aapt package** — `aapt package -f -M AndroidManifest.xml -S res -A assets -I android.jar -F base.apk` (packs the manifest, resources and the PRoot binaries from `assets/proot/`).
 4. **d8** — `java -cp lib/d8.jar com.android.tools.r8.D8 --release --min-api 26 --lib android.jar --output dex obj/**/*.class` → `classes.dex`; `aapt add base.apk classes.dex`.

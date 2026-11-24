@@ -1,4 +1,4 @@
-package org.apacemobile;
+package com.kotpasztet.apacelauncher;
 
 import android.content.Context;
 
@@ -48,12 +48,15 @@ public final class Updater {
         CheckResult r = new CheckResult();
         r.current = InstallerEngine.readVersion(paths);
         try {
-            if ("main".equals(prefs.channel())) {
+            if ("dev".equals(prefs.channel())) {
+                // Kanał Dev: najnowszy obraz ghcr.io/kotpasztet/apace:dev
+                // (build z brancha dev — nowy commit => nowy digest => update).
                 GitHubApi.DevBuild dev = GitHubApi.latestDevBuild();
                 r.latest = dev.version;
                 r.assetUrl = "ghcr-blob:" + dev.layerDigest;
                 r.message = "Source: ghcr.io/kotpasztet/apace:dev (dev image — same as docker-compose.dev.yml)";
             } else {
+                // Kanał Main: najnowszy stabilny release z GitHub Releases.
                 GitHubApi.Release rel = GitHubApi.latestRelease();
                 GitHubApi.Asset a = GitHubApi.pickArm64Asset(rel);
                 r.latest = rel.tag;

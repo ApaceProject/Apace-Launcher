@@ -1,6 +1,6 @@
 # apacemobile — the Android app module
 
-This module contains the Apace Launcher Android app (package `org.apacemobile`), built **without Gradle**:
+This module contains the Apace Launcher Android app (package `com.kotpasztet.apacelauncher`), built **without Gradle**:
 
 - `src/org/apacemobile/` — plain Java sources (no AndroidX, no external dependencies; `javac` source/target 8 against `android.jar`);
 - `res/` — launcher icons, app strings, network security config;

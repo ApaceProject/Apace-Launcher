@@ -1,4 +1,4 @@
-package org.apacemobile;
+package com.kotpasztet.apacelauncher;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -69,8 +69,8 @@ public class MainActivity extends Activity {
     private static final int REQ_IMPORT = 102;
     private static final int REQ_FILE_CHOOSER = 103;
 
-    private static final int CH_MAIN = 0; // prefs "stable" — GitHub Releases
-    private static final int CH_DEV  = 1; // prefs "main"   — official dev-build release
+    private static final int CH_MAIN = 0; // prefs "main" — GitHub Releases (stable)
+    private static final int CH_DEV  = 1; // prefs "dev"  — obraz ghcr.io/kotpasztet/apace:dev
 
     private Paths paths;
     private Prefs prefs;
@@ -78,7 +78,7 @@ public class MainActivity extends Activity {
     private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
 
     private FrameLayout content;
-    private Button menuBtn;                // corner ⋮ (hidden while panel shown)
+    private Button updOffer;               // „Update available” na ekranie Start (auto-check)
     private LinearLayout progBox;          // install view (when active)
     private ProgressBar progBar;
     private TextView progLabel, progPercent;
@@ -90,6 +90,7 @@ public class MainActivity extends Activity {
     private ValueCallback<Uri[]> fileChooserCallback;
     private File exportBackup;
     private Updater.CheckResult lastCheck;
+    private boolean updateChecking = false;    // tło-check raz na sesję ekranu Start
     private boolean webLoaded = false;          // panel page loaded — re-attach never reloads
     private android.os.Bundle pendingWebState;  // WebView history to restore after recreation
     private boolean menuShownAtRoot = false;
@@ -114,7 +115,6 @@ public class MainActivity extends Activity {
         content.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         root.addView(content);
-        menuBtn = buildMenuButton();
         setContentView(root);
         showState();
     }
@@ -310,20 +310,6 @@ public class MainActivity extends Activity {
         return box;
     }
 
-    private Button buildMenuButton() {
-        Button b = new Button(this, null, 0);
-        b.setText("⋮");
-        b.setTextSize(20);
-        b.setTextColor(C_TEXT);
-        GradientDrawable g = new GradientDrawable();
-        g.setColor(C_CARD);
-        g.setStroke(dp(2), C_BORDER);
-        b.setBackground(g);
-        b.setPadding(0, 0, 0, 0);
-        b.setGravity(Gravity.CENTER);
-        b.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { openMenu(); }});
-        return b;
-    }
 
     // ── state views ────────────────────────────────────────────────────────
 
@@ -357,7 +343,7 @@ public class MainActivity extends Activity {
                 "Main — stable release (recommended)",
                 "Dev — official Apace dev build (dev branch)"
         };
-        final int[] channelIdx = { CH_MAIN };
+        final int[] channelIdx = { "dev".equals(prefs.channel()) ? CH_DEV : CH_MAIN };
         final Button chBtn = mcButton(chItems[channelIdx[0]], false);
         chBtn.setAllCaps(false);
         chBtn.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
@@ -381,7 +367,7 @@ public class MainActivity extends Activity {
         Button install = mcButton("Install Apace", true);
         install.setTextSize(15);
         install.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
-            String ch = channelIdx[0] == CH_DEV ? "main" : "stable";
+            String ch = channelIdx[0] == CH_DEV ? "dev" : "main";
             prefs.channel(ch);
             confirm("Install Apace?",
                     "The app will download the environment: Ubuntu ARM64, Java 17, .NET 10 "
@@ -508,6 +494,16 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         blp.topMargin = dp(18);
         card.addView(b, blp);
+        updOffer = mcButton("Update available", true);
+        updOffer.setAllCaps(false);
+        updOffer.setVisibility(View.GONE);
+        updOffer.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
+            updateDialog();
+        }});
+        LinearLayout.LayoutParams ulp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        ulp.topMargin = dp(10);
+        card.addView(updOffer, ulp);
         TextView note = text("The server also starts automatically when you open the app.",
                 C_DIM, 10, false);
         note.setGravity(Gravity.CENTER);
@@ -533,6 +529,7 @@ public class MainActivity extends Activity {
         logView = null;
         logScroll = null;
         startError = null;
+        updOffer = null;
         applyImmersive(s == ApaceService.State.RUNNING);
         menuShownAtRoot = false;
         if (s == ApaceService.State.RUNNING) {
@@ -561,15 +558,10 @@ public class MainActivity extends Activity {
                 break;
             default:
                 content.addView(viewStart());
+                if (paths.isInstalled() && lastCheck == null && !updateChecking) {
+                    performUpdateCheck(null, null); // auto-check → „Update available”
+                }
         }
-        content.addView(menuBtn, menuBtnParams());
-    }
-
-    private FrameLayout.LayoutParams menuBtnParams() {
-        FrameLayout.LayoutParams ml = new FrameLayout.LayoutParams(dp(44), dp(44));
-        ml.gravity = Gravity.TOP | Gravity.END;
-        ml.setMargins(0, dp(12), dp(12), 0);
-        return ml;
     }
 
     /** Render the install progress screen immediately after the click. */
@@ -579,7 +571,6 @@ public class MainActivity extends Activity {
         logView = null;
         logScroll = null;
         content.addView(viewProgress());
-        content.addView(menuBtn, menuBtnParams());
     }
 
     /** Render the loading spinner immediately after a Start click. */
@@ -589,7 +580,6 @@ public class MainActivity extends Activity {
         logView = null;
         logScroll = null;
         content.addView(viewBusy(label));
-        content.addView(menuBtn, menuBtnParams());
     }
 
     // ── Panel WebView (RUNNING) — full screen, immersive, fixed size ──────
@@ -759,18 +749,20 @@ public class MainActivity extends Activity {
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
-            if (ApaceService.state() == ApaceService.State.RUNNING) {
-                // Inside the panel: Back = page history, then menu, then minimize
-                if (webView != null && webView.canGoBack()) {
-                    webView.goBack();
-                } else if (menuShownAtRoot) {
-                    moveTaskToBack(true);
-                } else {
-                    menuShownAtRoot = true;
-                    openMenu();
-                }
+            // Przycisk menu (⋮) usunięty — Back otwiera menu w każdym stanie.
+            // Panel: najpierw historia strony, potem menu, na końcu minimalizacja.
+            if (ApaceService.state() == ApaceService.State.RUNNING
+                    && webView != null && webView.canGoBack()) {
+                webView.goBack();
                 return true;
             }
+            if (menuShownAtRoot) {
+                moveTaskToBack(true);
+                return true;
+            }
+            menuShownAtRoot = true;
+            openMenu();
+            return true;
         }
         return super.onKeyDown(keyCode, event);
     }
@@ -780,6 +772,9 @@ public class MainActivity extends Activity {
     private void openMenu() {
         ApaceService.State s = ApaceService.state();
         final boolean running = s == ApaceService.State.RUNNING || s == ApaceService.State.STARTING;
+        final String updLabel = "Update Apace"
+                + (lastCheck != null && lastCheck.available && lastCheck.latest != null
+                        ? " (" + lastCheck.latest + " available)" : "");
         new AlertDialog.Builder(this, R.style.ApaceDialog)
                 .setTitle("Apace Launcher")
                 .setItems(new String[]{
@@ -787,7 +782,7 @@ public class MainActivity extends Activity {
                         "Console (logs)",
                         "Backup data",
                         "Restore backup (import zip)",
-                        "Update Apace",
+                        updLabel,
                         "Settings",
                         "Licenses"
                 }, new DialogInterface.OnClickListener() {
@@ -872,7 +867,7 @@ public class MainActivity extends Activity {
         box.setPadding(dp(20), dp(12), dp(20), 0);
         String cur = InstallerEngine.readVersion(paths);
         TextView info = text("Installed: " + (cur != null ? cur : "—")
-                        + "\nChannel: " + ("main".equals(prefs.channel()) ? "Dev (dev-build)" : "Main (stable)"),
+                        + "\nChannel: " + ("dev".equals(prefs.channel()) ? "Dev (dev-build)" : "Main (stable)"),
                 C_TEXT, 13, false);
         box.addView(info);
 
@@ -901,25 +896,43 @@ public class MainActivity extends Activity {
         clp.setMargins(0, dp(12), 0, dp(12));
         box.addView(check, clp);
         check.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
-            result.setText("Checking…");
-            new Thread() { public void run() {
-                final Updater.CheckResult r = new Updater(MainActivity.this, prefs, paths, null).check();
-                ui.post(new Runnable() { public void run() {
-                    lastCheck = r;
-                    result.setText((r.message != null ? r.message + "\n" : "")
-                            + "Latest: " + r.latest
-                            + (r.available ? "  → update available" : "  → up to date"));
-                    boolean can = r.available && r.assetUrl != null;
-                    apply.setEnabled(can);
-                    apply.setAlpha(can ? 1f : 0.4f);
-                }});
-            }}.start();
+            performUpdateCheck(result, apply);
         }});
         holder[0] = new AlertDialog.Builder(this, R.style.ApaceDialog)
                 .setTitle("Update Apace")
                 .setView(box)
                 .setNegativeButton("Close", null)
                 .show();
+        performUpdateCheck(result, apply); // auto-check od razu po otwarciu
+    }
+
+    /** Wspólny check update'u: przycisk w dialogu, auto po otwarciu, auto na ekranie Start. */
+    private void performUpdateCheck(final TextView result, final Button apply) {
+        if (updateChecking) return;
+        updateChecking = true;
+        if (result != null) result.setText("Checking…");
+        new Thread() { public void run() {
+            final Updater.CheckResult r = new Updater(MainActivity.this, prefs, paths, null).check();
+            ui.post(new Runnable() { public void run() {
+                updateChecking = false;
+                lastCheck = r;
+                if (result != null) {
+                    result.setText((r.message != null ? r.message + "\n" : "")
+                            + "Latest: " + r.latest
+                            + (r.available ? "  → update available" : "  → up to date"));
+                }
+                if (apply != null) {
+                    boolean can = r.available && r.assetUrl != null;
+                    apply.setEnabled(can);
+                    apply.setAlpha(can ? 1f : 0.4f);
+                }
+                if (updOffer != null) {
+                    boolean show = r.available && r.assetUrl != null;
+                    if (show) updOffer.setText("Update available: " + r.latest);
+                    updOffer.setVisibility(show ? View.VISIBLE : View.GONE);
+                }
+            }});
+        }}.start();
     }
 
     private void settingsDialog() {
@@ -1034,7 +1047,7 @@ public class MainActivity extends Activity {
             }
             confirm("Delete the environment?",
                     "Deletes Ubuntu, .NET, Java and the Apace files (backups are kept). "
-                            + "The game world will be lost — make a backup first (⋮ → Backup data).",
+                            + "The game world will be lost — make a backup first (Back → Backup data).",
                     new Runnable() { public void run() {
                         confirm("Are you sure?", "This cannot be undone.",
                                 new Runnable() { public void run() {
