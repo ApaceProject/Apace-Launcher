@@ -33,14 +33,9 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
-import android.widget.RadioButton;
-import android.widget.RadioGroup;
 import android.widget.ScrollView;
-import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
-
-import java.io.File;
 
 /**
  * Apace Launcher — minimal native UI styled after the Apace web panel
@@ -65,8 +60,6 @@ public class MainActivity extends Activity {
     static final int C_DIM     = 0xFF9A9AB0;
     static final int C_RED     = 0xFFEF4444;
 
-    private static final int REQ_EXPORT = 101;
-    private static final int REQ_IMPORT = 102;
     private static final int REQ_FILE_CHOOSER = 103;
 
     private static final int CH_MAIN = 0; // prefs "main" — GitHub Releases (stable)
@@ -74,7 +67,6 @@ public class MainActivity extends Activity {
 
     private Paths paths;
     private Prefs prefs;
-    private BackupManager backups;
     private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
 
     private FrameLayout content;
@@ -88,7 +80,6 @@ public class MainActivity extends Activity {
 
     private WebView webView;
     private ValueCallback<Uri[]> fileChooserCallback;
-    private File exportBackup;
     private Updater.CheckResult lastCheck;
     private boolean updateChecking = false;    // tło-check raz na sesję ekranu Start
     private boolean webLoaded = false;          // panel page loaded — re-attach never reloads
@@ -102,7 +93,6 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         paths = new Paths(this);
         prefs = new Prefs(this);
-        backups = new BackupManager(paths);
         pendingWebState = savedInstanceState != null
                 ? savedInstanceState.getBundle("web") : null;
         getWindow().setStatusBarColor(C_CARD);
@@ -422,6 +412,20 @@ public class MainActivity extends Activity {
         progPercent.setGravity(Gravity.CENTER);
         progPercent.setPadding(0, dp(8), 0, 0);
         card.addView(progPercent);
+        // Anulowanie instalacji — akcja serwisowa istniała, ale nie miała przycisku.
+        Button cancel = mcButton("Cancel install", false);
+        cancel.setAllCaps(false);
+        cancel.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
+            confirm("Cancel installation?",
+                    "The partial download will be discarded and nothing will be installed.",
+                    new Runnable() { public void run() {
+                        svc(ApaceService.ACTION_CANCEL_INSTALL);
+                    }});
+        }});
+        LinearLayout.LayoutParams canlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        canlp.topMargin = dp(16);
+        card.addView(cancel, canlp);
         root.addView(card, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -434,7 +438,7 @@ public class MainActivity extends Activity {
         return root;
     }
 
-    private View viewBusy(String titleText) {
+    private View viewBusy(String titleText, boolean interruptable) {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(C_BG);
@@ -451,6 +455,27 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(dp(44), dp(44));
         slp.topMargin = dp(18);
         card.addView(sp, slp);
+        if (interruptable) {
+            // Przerwanie ładowania = stop serwera + przełączenie kanału dev ↔ main
+            // (następny check/start pobierze build z drugiego kanału).
+            final boolean toDev = !"dev".equals(prefs.channel());
+            Button abort = mcButton(toDev
+                    ? "Interrupt — switch to Dev (dev build)"
+                    : "Interrupt — switch to Main (stable)", false);
+            abort.setAllCaps(false);
+            abort.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
+                prefs.channel(toDev ? "dev" : "main");
+                Toast.makeText(MainActivity.this,
+                        toDev ? "Channel switched to Dev (dev build)"
+                              : "Channel switched to Main (stable)",
+                        Toast.LENGTH_LONG).show();
+                svc(ApaceService.ACTION_STOP);
+            }});
+            LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            alp.topMargin = dp(16);
+            card.addView(abort, alp);
+        }
         root.addView(card, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -548,13 +573,13 @@ public class MainActivity extends Activity {
                 content.addView(viewProgress());
                 break;
             case UPDATING:
-                content.addView(viewBusy("Updating Apace…"));
+                content.addView(viewBusy("Updating Apace…", false));
                 break;
             case STARTING:
-                content.addView(viewBusy("Apace loading…"));
+                content.addView(viewBusy("Apace loading…", true));
                 break;
             case STOPPING:
-                content.addView(viewBusy("Stopping Apace…"));
+                content.addView(viewBusy("Stopping Apace…", false));
                 break;
             default:
                 content.addView(viewStart());
@@ -579,7 +604,7 @@ public class MainActivity extends Activity {
         progBox = null;
         logView = null;
         logScroll = null;
-        content.addView(viewBusy(label));
+        content.addView(viewBusy(label, true));
     }
 
     // ── Panel WebView (RUNNING) — full screen, immersive, fixed size ──────
@@ -769,95 +794,26 @@ public class MainActivity extends Activity {
 
     // ── ⋮ menu ─────────────────────────────────────────────────────────────
 
+    /**
+     * Menu (Back) — tylko to, czego panel WWW nie ma: aktualizacje Apace
+     * (kanał dev/main) i licencje. Stop, konsola, backup i ustawienia
+     * są dostępne w samym panelu.
+     */
     private void openMenu() {
-        ApaceService.State s = ApaceService.state();
-        final boolean running = s == ApaceService.State.RUNNING || s == ApaceService.State.STARTING;
         final String updLabel = "Update Apace"
                 + (lastCheck != null && lastCheck.available && lastCheck.latest != null
                         ? " (" + lastCheck.latest + " available)" : "");
         new AlertDialog.Builder(this, R.style.ApaceDialog)
                 .setTitle("Apace Launcher")
                 .setItems(new String[]{
-                        running ? "Stop server" : "Start server",
-                        "Console (logs)",
-                        "Backup data",
-                        "Restore backup (import zip)",
                         updLabel,
-                        "Settings",
                         "Licenses"
                 }, new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int w) {
-                        if (w == 0) {
-                            svc(running ? ApaceService.ACTION_STOP : ApaceService.ACTION_START);
-                            if (!running) showBusyNow("Apace loading…");
-                        }
-                        else if (w == 1) consoleDialog();
-                        else if (w == 2) backupNow();
-                        else if (w == 3) importBackup();
-                        else if (w == 4) updateDialog();
-                        else if (w == 5) settingsDialog();
+                        if (w == 0) updateDialog();
                         else licenseDialog();
                     }
                 }).show();
-    }
-
-    private void importBackup() {
-        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType("application/zip");
-        startActivityForResult(i, REQ_IMPORT);
-    }
-
-    private void consoleDialog() {
-        final TextView tv = new TextView(this);
-        tv.setTypeface(Typeface.MONOSPACE);
-        tv.setTextSize(10);
-        tv.setTextColor(C_TEXT);
-        tv.setText(LogRing.dump());
-        ScrollView sc = new ScrollView(this);
-        sc.addView(tv);
-        new AlertDialog.Builder(this, R.style.ApaceDialog)
-                .setTitle("Console")
-                .setView(sc)
-                .setPositiveButton("Refresh", new DialogInterface.OnClickListener() {
-                    public void onClick(DialogInterface d, int w) {
-                        tv.setText(LogRing.dump());
-                    }
-                })
-                .setNegativeButton("Close", null)
-                .show();
-    }
-
-    private void backupNow() {
-        new Thread() { public void run() {
-            try {
-                final File f = backups.createBackup();
-                ui.post(new Runnable() { public void run() {
-                    new AlertDialog.Builder(MainActivity.this, R.style.ApaceDialog)
-                            .setTitle("Backup created")
-                            .setMessage(f.getName() + " (" + (f.length() >> 20) + " MB)\n\n"
-                                    + "Android deletes app data on uninstall — export the "
-                                    + "backup outside the app.")
-                            .setPositiveButton("Export", new DialogInterface.OnClickListener() {
-                                public void onClick(DialogInterface d, int w) { startExport(f); }
-                            })
-                            .setNegativeButton("Later", null).show();
-                }});
-            } catch (final Exception e) {
-                ui.post(new Runnable() { public void run() {
-                    Toast.makeText(MainActivity.this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
-                }});
-            }
-        }}.start();
-    }
-
-    private void startExport(File f) {
-        exportBackup = f;
-        Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
-        i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType("application/zip");
-        i.putExtra(Intent.EXTRA_TITLE, f.getName());
-        startActivityForResult(i, REQ_EXPORT);
     }
 
     private void updateDialog() {
@@ -866,9 +822,7 @@ public class MainActivity extends Activity {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(12), dp(20), 0);
         String cur = InstallerEngine.readVersion(paths);
-        TextView info = text("Installed: " + (cur != null ? cur : "—")
-                        + "\nChannel: " + ("dev".equals(prefs.channel()) ? "Dev (dev-build)" : "Main (stable)"),
-                C_TEXT, 13, false);
+        final TextView info = text(channelInfoLine(cur), C_TEXT, 13, false);
         box.addView(info);
 
         final TextView result = text("", C_DIM, 12, false);
@@ -898,6 +852,9 @@ public class MainActivity extends Activity {
         check.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
             performUpdateCheck(result, apply);
         }});
+        // Kanał dev ↔ main — przełącza źródło pobierania (Updater + InstallerEngine)
+        // i od razu ponawia check dla wybranego kanału.
+        box.addView(channelPicker(info, cur, result, apply));
         holder[0] = new AlertDialog.Builder(this, R.style.ApaceDialog)
                 .setTitle("Update Apace")
                 .setView(box)
@@ -906,13 +863,71 @@ public class MainActivity extends Activity {
         performUpdateCheck(result, apply); // auto-check od razu po otwarciu
     }
 
+    /** Wybór kanału w dialogu aktualizacji: Main (GitHub Releases) | Dev (ghcr :dev). */
+    private LinearLayout channelPicker(final TextView info, final String cur,
+                                       final TextView result, final Button apply) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        final Button main = mcButton("Main (stable)", false);
+        final Button dev = mcButton("Dev (dev build)", false);
+        main.setAllCaps(false);
+        dev.setAllCaps(false);
+        paintChannelChips(main, dev);
+        main.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
+            if (!"main".equals(prefs.channel())) {
+                prefs.channel("main");
+                channelChanged(info, cur, main, dev, result, apply);
+            }
+        }});
+        dev.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
+            if (!"dev".equals(prefs.channel())) {
+                prefs.channel("dev");
+                channelChanged(info, cur, main, dev, result, apply);
+            }
+        }});
+        LinearLayout.LayoutParams lp1 = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        lp1.setMargins(0, dp(14), dp(6), 0);
+        row.addView(main, lp1);
+        LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        lp2.setMargins(dp(6), dp(14), 0, 0);
+        row.addView(dev, lp2);
+        return row;
+    }
+
+    private void channelChanged(TextView info, String cur, Button main, Button dev,
+                                TextView result, Button apply) {
+        paintChannelChips(main, dev);
+        info.setText(channelInfoLine(cur));
+        performUpdateCheck(result, apply);
+    }
+
+    private void paintChannelChips(Button main, Button dev) {
+        boolean isDev = "dev".equals(prefs.channel());
+        main.setAlpha(isDev ? 0.45f : 1f);
+        dev.setAlpha(isDev ? 1f : 0.45f);
+    }
+
+    /** Linia „Installed / Channel” w dialogu aktualizacji. */
+    private String channelInfoLine(String cur) {
+        return "Installed: " + (cur != null ? cur : "—")
+                + "\nChannel: " + ("dev".equals(prefs.channel()) ? "Dev (dev-build)" : "Main (stable)");
+    }
+
     /** Wspólny check update'u: przycisk w dialogu, auto po otwarciu, auto na ekranie Start. */
     private void performUpdateCheck(final TextView result, final Button apply) {
         if (updateChecking) return;
         updateChecking = true;
+        final String checkedChannel = prefs.channel();
         if (result != null) result.setText("Checking…");
         new Thread() { public void run() {
             final Updater.CheckResult r = new Updater(MainActivity.this, prefs, paths, null).check();
+            if (!checkedChannel.equals(prefs.channel())) {
+                // kanał przełączony w trakcie checku (chips) — wynik nieaktualny
+                updateChecking = false;
+                return;
+            }
             ui.post(new Runnable() { public void run() {
                 updateChecking = false;
                 lastCheck = r;
@@ -933,137 +948,6 @@ public class MainActivity extends Activity {
                 }
             }});
         }}.start();
-    }
-
-    private void settingsDialog() {
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(20), dp(12), dp(20), 0);
-
-        box.addView(label("PANEL PORT (5000)"));
-        final EditText portPanel = field("5000");
-        portPanel.setText(String.valueOf(prefs.panelPort()));
-        portPanel.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-        box.addView(portPanel, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        TextView al = label("APIPORT IN CONFIG.JSON (1808)");
-        al.setPadding(0, dp(14), 0, 0);
-        box.addView(al);
-        final EditText portApi = field("1808");
-        portApi.setText(String.valueOf(prefs.apiPort()));
-        portApi.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-        box.addView(portApi, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        final Switch swLan = new Switch(this);
-        swLan.setText("Allow LAN panel (0.0.0.0 — panel over Wi-Fi)");
-        swLan.setTextColor(C_TEXT);
-        swLan.setTextSize(12);
-        swLan.setChecked(prefs.allowLan());
-        swLan.setPadding(0, dp(14), 0, 0);
-        box.addView(swLan);
-
-        final Switch swAwake = new Switch(this);
-        swAwake.setText("Wake lock (keeps the CPU awake while running)");
-        swAwake.setTextColor(C_TEXT);
-        swAwake.setTextSize(12);
-        swAwake.setChecked(prefs.keepAwake());
-        box.addView(swAwake);
-
-        final Switch swAuto = new Switch(this);
-        swAuto.setText("Start on device boot");
-        swAuto.setTextColor(C_TEXT);
-        swAuto.setTextSize(12);
-        swAuto.setChecked(prefs.autoStart());
-        box.addView(swAuto);
-
-        TextView hl = label(".NET HEAP LIMIT (RESTART REQUIRED)");
-        hl.setPadding(0, dp(14), 0, 0);
-        box.addView(hl);
-        RadioGroup heap = new RadioGroup(this);
-        heap.setOrientation(RadioGroup.HORIZONTAL);
-        final int[] vals = {256, 512, 1024, 1536};
-        for (int v : vals) {
-            RadioButton rb = new RadioButton(this);
-            rb.setText(v + " MB");
-            rb.setTextColor(C_TEXT);
-            rb.setTextSize(11);
-            rb.setId(1000 + v);
-            if (prefs.heapMb() == v) rb.setChecked(true);
-            heap.addView(rb);
-        }
-        box.addView(heap);
-
-        Button save = mcButton("Save", true);
-        save.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
-            int p1 = Prefs.clampPort(parseInt(portPanel), 5000);
-            int p2 = Prefs.clampPort(parseInt(portApi), 1808);
-            prefs.panelPort(p1);
-            prefs.apiPort(p2);
-            prefs.allowLan(swLan.isChecked());
-            prefs.keepAwake(swAwake.isChecked());
-            prefs.autoStart(swAuto.isChecked());
-            int heapId = heap.getCheckedRadioButtonId();
-            if (heapId > 0) prefs.heapMb(heapId - 1000);
-            try {
-                File cfg = new File(paths.current, "launcher/config.json");
-                if (cfg.isFile()) {
-                    org.json.JSONObject o = new org.json.JSONObject(InstallerEngine.readText(cfg));
-                    o.put("ApiPort", p2);
-                    InstallerEngine.writeText(cfg, o.toString());
-                }
-            } catch (Exception ignore) {}
-            Toast.makeText(MainActivity.this,
-                    "Saved (restart the server for the ports to apply)", Toast.LENGTH_LONG).show();
-        }});
-        box.addView(save, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        Button battery = mcButton("Disable battery optimization", false);
-        battery.setAllCaps(false);
-        battery.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
-            try {
-                startActivity(new Intent(android.provider.Settings
-                        .ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                        Uri.parse("package:" + getPackageName())));
-            } catch (Exception e) {
-                Toast.makeText(MainActivity.this, "Open battery settings manually", Toast.LENGTH_SHORT).show();
-            }
-        }});
-        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        blp.setMargins(0, dp(12), 0, 0);
-        box.addView(battery, blp);
-
-        Button wipe = mcButton("Delete environment (clean reinstall)", false);
-        wipe.setAllCaps(false);
-        wipe.setTextColor(C_RED);
-        wipe.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
-            if (ApaceService.state() == ApaceService.State.RUNNING
-                    || ApaceService.state() == ApaceService.State.STARTING) {
-                Toast.makeText(MainActivity.this, "Stop the server first", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            confirm("Delete the environment?",
-                    "Deletes Ubuntu, .NET, Java and the Apace files (backups are kept). "
-                            + "The game world will be lost — make a backup first (Back → Backup data).",
-                    new Runnable() { public void run() {
-                        confirm("Are you sure?", "This cannot be undone.",
-                                new Runnable() { public void run() {
-                                    Paths.rmRf(paths.runtime);
-                                    Paths.rmRf(paths.apace);
-                                    ApaceService.setState(ApaceService.State.NOT_INSTALLED);
-                                }});
-                    }});
-        }});
-        box.addView(wipe, blp);
-
-        new AlertDialog.Builder(this, R.style.ApaceDialog)
-                .setTitle("Settings")
-                .setView(box)
-                .setNegativeButton("Close", null)
-                .show();
     }
 
     private void licenseDialog() {
@@ -1089,11 +973,6 @@ public class MainActivity extends Activity {
                     public void onClick(DialogInterface d, int w) { onYes.run(); }
                 })
                 .setNegativeButton("Cancel", null).show();
-    }
-
-    private int parseInt(EditText e) {
-        try { return Integer.parseInt(e.getText().toString().trim()); }
-        catch (Exception ex) { return 0; }
     }
 
     private void svc(String action) {
@@ -1168,43 +1047,6 @@ public class MainActivity extends Activity {
                                 ? new Uri[]{ data.getData() } : null);
                 fileChooserCallback = null;
             }
-        } else if (req == REQ_EXPORT && res == RESULT_OK && data != null && data.getData() != null
-                && exportBackup != null) {
-            final Uri dest = data.getData();
-            final File src = exportBackup;
-            new Thread() { public void run() {
-                try {
-                    backups.exportTo(dest, src);
-                    ui.post(new Runnable() { public void run() {
-                        Toast.makeText(MainActivity.this, "Exported", Toast.LENGTH_SHORT).show();
-                    }});
-                } catch (final Exception e) {
-                    ui.post(new Runnable() { public void run() {
-                        Toast.makeText(MainActivity.this, "Export error: " + e.getMessage(),
-                                Toast.LENGTH_LONG).show();
-                    }});
-                }
-            }}.start();
-        } else if (req == REQ_IMPORT && res == RESULT_OK && data != null && data.getData() != null) {
-            final Uri src = data.getData();
-            confirm("Restore backup?",
-                    "Overwrites the data (world, accounts, config) with the selected zip. Continue?",
-                    new Runnable() { public void run() {
-                        new Thread() { public void run() {
-                            try {
-                                backups.importFrom(src);
-                                ui.post(new Runnable() { public void run() {
-                                    Toast.makeText(MainActivity.this, "Backup restored",
-                                            Toast.LENGTH_SHORT).show();
-                                }});
-                            } catch (final Exception e) {
-                                ui.post(new Runnable() { public void run() {
-                                    Toast.makeText(MainActivity.this, "Import error: " + e.getMessage(),
-                                            Toast.LENGTH_LONG).show();
-                                }});
-                            }
-                        }}.start();
-                    }});
         } else {
             super.onActivityResult(req, res, data);
         }

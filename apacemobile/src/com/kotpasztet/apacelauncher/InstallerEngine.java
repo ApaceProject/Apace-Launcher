@@ -54,7 +54,7 @@ public final class InstallerEngine {
     public void cancel() { cancelled = true; }
 
     private void checkCancel() throws Exception {
-        if (cancelled) throw new Exception("Instalacja anulowana przez użytkownika");
+        if (cancelled) throw new Exception("Installation cancelled by user");
     }
 
     private void stage(int i, String label) {
@@ -158,7 +158,7 @@ public final class InstallerEngine {
         // ── 9. Pliki Apace (Stable = GitHub Releases, Dev = obraz ghcr.io:dev) ─
         String channel = prefs.channel();
         String tag; String assetName; String assetUrl; String expectedSha = null;
-        if ("main".equals(channel)) {
+        if ("dev".equals(channel)) {
             stage(9, "Downloading Apace (Dev channel — ghcr.io/kotpasztet/apace:dev)");
             GitHubApi.DevBuild dev = GitHubApi.latestDevBuild();
             cb.detail("ghcr.io/kotpasztet/apace:dev @ " + dev.version);
