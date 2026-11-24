@@ -49,7 +49,7 @@ public final class Updater {
         r.current = InstallerEngine.readVersion(paths);
         try {
             if ("main".equals(prefs.channel())) {
-                GitHubApi.Release rel = GitHubApi.devRelease();
+                GitHubApi.Release rel = GitHubApi.releaseByTag(GitHubApi.DEV_TAG);
                 GitHubApi.Asset a = GitHubApi.pickDevArm64Asset(rel);
                 r.latest = a != null && a.updated != null ? a.updated : rel.tag;
                 if (a != null) r.assetUrl = a.url;

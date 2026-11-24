@@ -28,7 +28,7 @@
 
 | Step | What happens |
 |---|---|
-| First run | Pick the channel: **Main** (stable, Apace GitHub Releases) or **Dev** (the Apace `dev` branch — the rolling [`dev-build`](https://github.com/KotPasztet/Apace/releases/tag/dev-build) prerelease, or the one published by this repo's **Build Apace dev-build** workflow; works out of the box, nothing to paste) |
+| First run | Pick the channel: **Main** (stable, Apace GitHub Releases) or **Dev** (the rolling [`dev-build`](https://github.com/KotPasztet/Apace/releases/tag/dev-build) prerelease from the Apace `dev` branch — run *Developer Build* in the Apace repo once; nothing to paste) |
 | Install | 10 stages: PRoot → Ubuntu ARM64 → libraries → Java 17 → .NET 10 → Apace → smoke test, with a live console |
 | Daily use | The server **auto-starts** when you open the app ("Apace loading…" spinner), then the panel fills the whole screen |
 | In the panel | Android **Back** opens the app menu: Stop / Console / Backup / Restore / Update / Settings / Licenses |
@@ -37,7 +37,7 @@ Ports: `5000/tcp` panel · `1808/tcp` ApiPort · `19132/udp` Bedrock.
 
 ## Build
 
-GitHub Actions builds the APK on every push and tag (`.github/workflows/build.yml`).
+GitHub Actions builds the APK on every push (`.github/workflows/build.yml`). Manual workflows: **Release APK** publishes a release with the APK; **Build Apace dev-build** builds the Apace `dev` branch and uploads it as an artifact (manual download — no release).
 
 ```bash
 # locally (JDK 17 + Android SDK: platform-28, build-tools 33)

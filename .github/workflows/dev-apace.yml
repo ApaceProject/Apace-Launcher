@@ -1,14 +1,10 @@
 name: Build Apace dev-build
 
 # Manual only — builds the Apace dev branch (framework-dependent linux-arm64)
-# and publishes/updates the "dev-build" prerelease in THIS repo.
-# The app's Dev channel reads it as a fallback when the official
-# KotPasztet/Apace "dev-build" release does not exist yet.
+# and uploads the zip as a workflow artifact (manual download / inspection).
+# It does NOT create a release.
 on:
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   build:
@@ -51,25 +47,8 @@ jobs:
           cd build/Release/framework-dependent-linux-arm64
           zip -r -y "$GITHUB_WORKSPACE/Apace-Dev-linux-arm64.zip" .
 
-      - name: Apace dev commit
-        id: sha
-        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Apace-Dev-linux-arm64
           path: Apace-Dev-linux-arm64.zip
-
-      - name: Publish dev-build release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: dev-build
-          name: Apace dev-build @ ${{ steps.sha.outputs.sha }}
-          prerelease: true
-          make_latest: 'false'
-          files: Apace-Dev-linux-arm64.zip
-          body: |
-            Apace `dev` branch @ ${{ steps.sha.outputs.sha }} — published by the
-            Apace-Launcher *Build Apace dev-build* workflow (fallback source for
-            the app's Dev channel when KotPasztet/Apace has no official dev-build yet).
