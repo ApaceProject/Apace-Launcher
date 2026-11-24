@@ -20,6 +20,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
+import android.webkit.JsPromptResult;
+import android.webkit.JsResult;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -88,6 +90,8 @@ public class MainActivity extends Activity {
     private ValueCallback<Uri[]> fileChooserCallback;
     private File exportBackup;
     private Updater.CheckResult lastCheck;
+    private boolean webLoaded = false;          // panel page loaded — re-attach never reloads
+    private android.os.Bundle pendingWebState;  // WebView history to restore after recreation
     private boolean menuShownAtRoot = false;
 
     // ── lifecycle ──────────────────────────────────────────────────────────
@@ -98,6 +102,8 @@ public class MainActivity extends Activity {
         paths = new Paths(this);
         prefs = new Prefs(this);
         backups = new BackupManager(paths);
+        pendingWebState = savedInstanceState != null
+                ? savedInstanceState.getBundle("web") : null;
         getWindow().setStatusBarColor(C_CARD);
         getWindow().setNavigationBarColor(C_BG);
 
@@ -140,6 +146,17 @@ public class MainActivity extends Activity {
         ApaceService.noteAppHidden(); // apka schodzi z ekranu — start licznika idle
         unregisterReceiver(recv);
         super.onStop();
+    }
+
+    /** Zapamiętaj stan WebView — powrót po rekreacji (np. z wybieraka plików). */
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        if (webView != null) {
+            Bundle b = new Bundle();
+            webView.saveState(b);
+            outState.putBundle("web", b);
+        }
+        super.onSaveInstanceState(outState);
     }
 
     @Override
@@ -339,7 +356,7 @@ public class MainActivity extends Activity {
         chBtn.setAllCaps(false);
         chBtn.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
         chBtn.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
-            new AlertDialog.Builder(MainActivity.this)
+            new AlertDialog.Builder(MainActivity.this, R.style.ApaceDialog)
                     .setTitle("Update channel")
                     .setSingleChoiceItems(chItems, channelIdx[0], new DialogInterface.OnClickListener() {
                         public void onClick(DialogInterface d, int w) {
@@ -586,6 +603,21 @@ public class MainActivity extends Activity {
             CookieManager.getInstance().setAcceptCookie(true);
             webView.setWebViewClient(new WebViewClient() {
                 @Override
+                public boolean onRenderProcessGone(WebView wv,
+                        android.webkit.RenderProcessGoneDetail detail) {
+                    // renderer padł (zwykle OOM) — odbuduj WebView zamiast zostawiać
+                    // martwą stronę albo crashować apkę
+                    if (webView != null) {
+                        content.removeAllViews();
+                        webView.destroy();
+                        webView = null;
+                        webLoaded = false;
+                        showWebView();
+                    }
+                    return true;
+                }
+
+                @Override
                 public boolean shouldOverrideUrlLoading(WebView wv, String url) {
                     if (isLocalPanel(url)) return false; // only the local panel
                     try {
@@ -600,16 +632,75 @@ public class MainActivity extends Activity {
                 @Override
                 public boolean onShowFileChooser(WebView wv, ValueCallback<Uri[]> cb,
                                                  FileChooserParams params) {
+                    if (fileChooserCallback != null) {
+                        fileChooserCallback.onReceiveValue(null); // dokładnie jeden wynik na callback
+                    }
                     fileChooserCallback = cb;
                     Intent i = new Intent(Intent.ACTION_GET_CONTENT);
                     i.addCategory(Intent.CATEGORY_OPENABLE);
                     i.setType("*/*");
                     try {
-                        startActivityForResult(Intent.createChooser(i, "Choose file"), REQ_FILE_CHOOSER);
+                        startActivityForResult(i, REQ_FILE_CHOOSER);
                     } catch (Exception e) {
                         fileChooserCallback = null;
                         return false;
                     }
+                    return true;
+                }
+
+                // Stylowane dialogi (panel Apace) zamiast domyślnych systemowych monitów
+                @Override
+                public boolean onJsAlert(WebView wv, String url, String msg,
+                                         final JsResult result) {
+                    new AlertDialog.Builder(MainActivity.this, R.style.ApaceDialog)
+                            .setTitle("Apace panel").setMessage(msg)
+                            .setPositiveButton("OK", new DialogInterface.OnClickListener() {
+                                public void onClick(DialogInterface d, int w) { result.cancel(); }
+                            })
+                            .setOnCancelListener(new DialogInterface.OnCancelListener() {
+                                public void onCancel(DialogInterface d) { result.cancel(); }
+                            }).show();
+                    return true;
+                }
+
+                @Override
+                public boolean onJsConfirm(WebView wv, String url, String msg,
+                                           final JsResult result) {
+                    new AlertDialog.Builder(MainActivity.this, R.style.ApaceDialog)
+                            .setTitle("Apace panel").setMessage(msg)
+                            .setPositiveButton("Yes", new DialogInterface.OnClickListener() {
+                                public void onClick(DialogInterface d, int w) { result.confirm(); }
+                            })
+                            .setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+                                public void onClick(DialogInterface d, int w) { result.cancel(); }
+                            })
+                            .setOnCancelListener(new DialogInterface.OnCancelListener() {
+                                public void onCancel(DialogInterface d) { result.cancel(); }
+                            }).show();
+                    return true;
+                }
+
+                @Override
+                public boolean onJsPrompt(WebView wv, String url, String msg, String def,
+                                          final JsPromptResult result) {
+                    final EditText input = field("");
+                    if (def != null) input.setText(def);
+                    LinearLayout box = new LinearLayout(MainActivity.this);
+                    box.setOrientation(LinearLayout.VERTICAL);
+                    box.setPadding(dp(20), dp(8), dp(20), 0);
+                    box.addView(text(msg != null ? msg : "", C_TEXT, 13, false));
+                    box.addView(input, new LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                    new AlertDialog.Builder(MainActivity.this, R.style.ApaceDialog)
+                            .setTitle("Apace panel").setView(box)
+                            .setPositiveButton("OK", new DialogInterface.OnClickListener() {
+                                public void onClick(DialogInterface d, int w) {
+                                    result.confirm(input.getText().toString());
+                                }
+                            })
+                            .setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+                                public void onClick(DialogInterface d, int w) { result.cancel(); }
+                            }).show();
                     return true;
                 }
             });
@@ -642,7 +733,14 @@ public class MainActivity extends Activity {
         content.addView(webView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         webView.onResume();
-        webView.loadUrl("http://127.0.0.1:" + prefs.panelPort());
+        if (webLoaded) return; // re-attach: NIGDY nie przeładowuj — reset zmienia panel na stronę główną
+        if (pendingWebState != null && pendingWebState.size() > 0) {
+            webView.restoreState(pendingWebState); // powrót po rekreacji aktywności
+        } else {
+            webView.loadUrl("http://127.0.0.1:" + prefs.panelPort());
+        }
+        pendingWebState = null;
+        webLoaded = true;
     }
 
     private boolean isLocalPanel(String url) {
@@ -676,7 +774,7 @@ public class MainActivity extends Activity {
     private void openMenu() {
         ApaceService.State s = ApaceService.state();
         final boolean running = s == ApaceService.State.RUNNING || s == ApaceService.State.STARTING;
-        new AlertDialog.Builder(this)
+        new AlertDialog.Builder(this, R.style.ApaceDialog)
                 .setTitle("Apace Launcher")
                 .setItems(new String[]{
                         running ? "Stop server" : "Start server",
@@ -717,7 +815,7 @@ public class MainActivity extends Activity {
         tv.setText(LogRing.dump());
         ScrollView sc = new ScrollView(this);
         sc.addView(tv);
-        new AlertDialog.Builder(this)
+        new AlertDialog.Builder(this, R.style.ApaceDialog)
                 .setTitle("Console")
                 .setView(sc)
                 .setPositiveButton("Refresh", new DialogInterface.OnClickListener() {
@@ -734,7 +832,7 @@ public class MainActivity extends Activity {
             try {
                 final File f = backups.createBackup();
                 ui.post(new Runnable() { public void run() {
-                    new AlertDialog.Builder(MainActivity.this)
+                    new AlertDialog.Builder(MainActivity.this, R.style.ApaceDialog)
                             .setTitle("Backup created")
                             .setMessage(f.getName() + " (" + (f.length() >> 20) + " MB)\n\n"
                                     + "Android deletes app data on uninstall — export the "
@@ -811,7 +909,7 @@ public class MainActivity extends Activity {
                 }});
             }}.start();
         }});
-        holder[0] = new AlertDialog.Builder(this)
+        holder[0] = new AlertDialog.Builder(this, R.style.ApaceDialog)
                 .setTitle("Update Apace")
                 .setView(box)
                 .setNegativeButton("Close", null)
@@ -942,7 +1040,7 @@ public class MainActivity extends Activity {
         }});
         box.addView(wipe, blp);
 
-        new AlertDialog.Builder(this)
+        new AlertDialog.Builder(this, R.style.ApaceDialog)
                 .setTitle("Settings")
                 .setView(box)
                 .setNegativeButton("Close", null)
@@ -957,7 +1055,7 @@ public class MainActivity extends Activity {
             int n;
             while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
             in.close();
-            new AlertDialog.Builder(this).setTitle("Licenses")
+            new AlertDialog.Builder(this, R.style.ApaceDialog).setTitle("Licenses")
                     .setMessage(new String(bo.toByteArray(), "UTF-8"))
                     .setPositiveButton("OK", null).show();
         } catch (Exception e) {
@@ -966,7 +1064,7 @@ public class MainActivity extends Activity {
     }
 
     private void confirm(String title, String msg, final Runnable onYes) {
-        new AlertDialog.Builder(this)
+        new AlertDialog.Builder(this, R.style.ApaceDialog)
                 .setTitle(title).setMessage(msg)
                 .setPositiveButton("Yes", new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int w) { onYes.run(); }

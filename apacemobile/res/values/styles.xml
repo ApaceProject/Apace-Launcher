@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dialogi apki w stylu panelu Apace: ciemna karta #1A1A1A, ostra krawędź,
+     zielony akcent (#8BC34A) — zamiast domyślnych systemowych monitów. -->
+<resources>
+    <style name="ApaceDialog" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/apace_dialog_bg</item>
+        <item name="android:colorAccent">#FF8BC34A</item>
+        <item name="android:textColorPrimary">#FFD0D0D0</item>
+        <item name="android:textColor">#FFD0D0D0</item>
+        <item name="android:textColorHint">#FF6E6E86</item>
+        <item name="android:buttonBarPositiveButtonStyle">@style/ApaceDialogBtnPositive</item>
+        <item name="android:buttonBarNegativeButtonStyle">@style/ApaceDialogBtnNeutral</item>
+        <item name="android:buttonBarNeutralButtonStyle">@style/ApaceDialogBtnNeutral</item>
+    </style>
+
+    <style name="ApaceDialogBtnPositive" parent="@android:style/Widget.Material.ButtonBar.AlertDialog">
+        <item name="android:textColor">#FF8BC34A</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="ApaceDialogBtnNeutral" parent="@android:style/Widget.Material.ButtonBar.AlertDialog">
+        <item name="android:textColor">#FF9A9AB0</item>
+    </style>
+</resources>
