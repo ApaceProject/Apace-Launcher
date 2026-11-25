@@ -4,9 +4,9 @@ APACE MOBILE — NOTICE / LICENSES
 Ten pakiet zawiera i dystrybuuje następujące komponenty:
 
 1) Apace (serwer, pobierany w trakcie instalacji z GitHub Releases)
-   https://github.com/KotPasztet/Apace
+   https://github.com/ApaceProject/Apace
    Licencja: MIT License, Copyright (c) 2026 Bitcoder
-   Pełny tekst: https://github.com/KotPasztet/Apace/blob/main/LICENSE
+   Pełny tekst: https://github.com/ApaceProject/Apace/blob/main/LICENSE
    Uwaga: Apace sam w sobie zawiera komponenty pochodne (Fabric Server,
    Minecraft EULA dotyczy gry — serwer nie jest tu dystrybuowany w APK).
 

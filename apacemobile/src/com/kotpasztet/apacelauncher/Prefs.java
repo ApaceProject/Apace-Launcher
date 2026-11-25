@@ -36,7 +36,7 @@ public final class Prefs {
 
     /**
      * Kanał aktualizacji Apace: "main" = GitHub Releases (stabilny),
-     * "dev" = obraz ghcr.io/kotpasztet/apace:dev (build z brancha dev).
+     * "dev" = obraz ghcr.io/apaceproject/apace:dev (build z brancha dev).
      * Migracja starych wartości ("stable"→"main", stare "main"=dev-build→"dev").
      */
     public String channel() {

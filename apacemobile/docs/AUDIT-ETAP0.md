@@ -1,6 +1,6 @@
 # AUDYT TECHNICZNY APACE — ETAP 0 (dla projektu Apace Mobile)
 
-Data: 2026-11-24 • Przedmiot: `github.com/KotPasztet/Apace` @ `main` (v0.1.3) • Metoda: analiza kodu źródłowego (klon) + inspekcja realnego artefaktu `Apace-termux-arm64.zip` z release v0.1.3 (120 MB) + weryfikacja CI (`.github/workflows/release.yml`).
+Data: 2026-11-24 • Przedmiot: `github.com/ApaceProject/Apace` @ `main` (v0.1.3) • Metoda: analiza kodu źródłowego (klon) + inspekcja realnego artefaktu `Apace-termux-arm64.zip` z release v0.1.3 (120 MB) + weryfikacja CI (`.github/workflows/release.yml`).
 
 Wszystkie poniższe wnioski są zweryfikowane w kodzie/CI, nie założeniami.
 
@@ -58,8 +58,8 @@ Wykluczenia z `unzip -o`: `launcher/Data/*`, `launcher/logs/*`, `launcher/persis
 
 ## 7. Kanały aktualizacji
 
-- **Stable**: GitHub Releases (`api.github.com/repos/KotPasztet/Apace/releases/latest`) — dokładnie jak w `install-termux.sh` (pobiera tylko oficjalne Release, nie gałąź main). Asset select: `Apace-termux-arm64.zip` → fallback `Apace-linux-arm64.zip`.
-- **Dev**: obraz `ghcr.io/kotpasztet/apace:dev` — anonimowy pull OCI, dokładnie ten sam mechanizm co `docker-compose.dev.yml` (obraz publikuje workflow `docker-image-dev.yml` przy każdym pushu do `dev`). Apka: token anonimowy ghcr → index (multi-arch, wybór linux/arm64) → config/history → warstwa `COPY /src/build/Release/latest/` (zawartość `/app`, ~120 MB, layout identyczny jak zip framework-dependent). Ekstrakcja `TarExtractor` z filtrem prefiksu `app/` (zweryfikowana na realnej warstwie 2026-11-24: 1133 plików, tylko `app/**`, bit +x zachowany). Wersja = krótki digest indexu (12 hex, zmienia się przy każdym pushu). SHA-256 warstwy dotyczy tar przed gzip — nie weryfikowany (SHA pobranego pliku w logu).
+- **Stable**: GitHub Releases (`api.github.com/repos/ApaceProject/Apace/releases/latest`) — dokładnie jak w `install-termux.sh` (pobiera tylko oficjalne Release, nie gałąź main). Asset select: `Apace-termux-arm64.zip` → fallback `Apace-linux-arm64.zip`.
+- **Dev**: obraz `ghcr.io/apaceproject/apace:dev` — anonimowy pull OCI, dokładnie ten sam mechanizm co `docker-compose.dev.yml` (obraz publikuje workflow `docker-image-dev.yml` przy każdym pushu do `dev`). Apka: token anonimowy ghcr → index (multi-arch, wybór linux/arm64) → config/history → warstwa `COPY /src/build/Release/latest/` (zawartość `/app`, ~120 MB, layout identyczny jak zip framework-dependent). Ekstrakcja `TarExtractor` z filtrem prefiksu `app/` (zweryfikowana na realnej warstwie 2026-11-24: 1133 plików, tylko `app/**`, bit +x zachowany). Wersja = krótki digest indexu (12 hex, zmienia się przy każdym pushu). SHA-256 warstwy dotyczy tar przed gzip — nie weryfikowany (SHA pobranego pliku w logu).
 
 ## 8. PRoot na Androidzie (środowisko)
 

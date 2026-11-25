@@ -4,7 +4,7 @@ import java.io.File;
 import java.util.List;
 
 /**
- * Dev channel: pobieranie i rozpakowywanie OBRAZU ghcr.io/kotpasztet/apace:dev
+ * Dev channel: pobieranie i rozpakowywanie OBRAZU ghcr.io/apaceproject/apace:dev
  * (używane przez instalator pierwszej instalacji i przez Updater).
  *
  * Kluczowa zmiana (fix „rootfs nigdy się nie aktualizuje”): aktualizacja dev

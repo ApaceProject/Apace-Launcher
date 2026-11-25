@@ -11,7 +11,7 @@ import java.util.List;
 
 /**
  * Aktualizacje Apace (specyfikacja 7): kanał Stable/Main = GitHub Releases,
- * kanał Dev = obraz ghcr.io/kotpasztet/apace:dev (anonimowy pull OCI).
+ * kanał Dev = obraz ghcr.io/apaceproject/apace:dev (anonimowy pull OCI).
  *
  * Od 1.1.8 aktualizacja Dev stosuje PEŁNY filesystem obrazu:
  *  - warstwy systemowe (Ubuntu 24.04 + Java 17 + .NET 10 + aapt2/zipalign +
@@ -118,12 +118,12 @@ public final class Updater {
         r.current = InstallerEngine.readVersion(paths);
         try {
             if ("dev".equals(prefs.channel())) {
-                // Kanał Dev: najnowszy obraz ghcr.io/kotpasztet/apace:dev
+                // Kanał Dev: najnowszy obraz ghcr.io/apaceproject/apace:dev
                 GitHubApi.DevBuild dev = GitHubApi.latestDevBuild();
                 r.latest = dev.version;
                 r.assetUrl = "ghcr-image:" + dev.appKey;
                 StringBuilder m = new StringBuilder(
-                        "Source: ghcr.io/kotpasztet/apace:dev\nImage commit: ").append(dev.version);
+                        "Source: ghcr.io/apaceproject/apace:dev\nImage commit: ").append(dev.version);
                 if (dev.created != null && dev.created.length() >= 16) {
                     m.append(" (built ").append(dev.created.substring(0, 16).replace('T', ' '))
                             .append(" UTC)");
@@ -280,14 +280,14 @@ public final class Updater {
     }
 
     /**
-     * Kanał Dev: pełny filesystem obrazu ghcr.io/kotpasztet/apace:dev.
+     * Kanał Dev: pełny filesystem obrazu ghcr.io/apaceproject/apace:dev.
      * Warstwy systemowe → rootfs (z pominięciem docker.io i /app), warstwy /app
      * → katalog programu. Gdy „rootfsKey” z markera zgadza się z warstwami
      * systemowymi obrazu, rootfs nie jest przebudowywany (tylko /app).
      */
     private void runDevUpdate(String expectedAppKey, String version, ProgressListener cb) throws Exception {
         // 1. Rozwiązanie obrazu na żywo (świeży token ghcr)
-        cb.phase("Resolving ghcr.io/kotpasztet/apace:dev");
+        cb.phase("Resolving ghcr.io/apaceproject/apace:dev");
         GitHubApi.DevBuild img = GitHubApi.latestDevBuild();
         if (expectedAppKey != null && expectedAppKey.length() > 0
                 && !expectedAppKey.equals(img.appKey)) {

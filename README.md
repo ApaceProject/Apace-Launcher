@@ -4,23 +4,23 @@
 
 <p align="center">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License"></a>
-  <img src="https://img.shields.io/github/stars/KotPasztet/apace-launcher?style=flat-square" alt="GitHub Stars">
-  <img src="https://img.shields.io/github/downloads/KotPasztet/apace-launcher/total?style=flat-square" alt="GitHub Downloads">
-  <a href="https://github.com/KotPasztet/apace-launcher/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/KotPasztet/apace-launcher/build.yml?style=flat-square" alt="Build APK"></a>
+  <img src="https://img.shields.io/github/stars/ApaceProject/Apace-Launcher?style=flat-square" alt="GitHub Stars">
+  <img src="https://img.shields.io/github/downloads/ApaceProject/Apace-Launcher/total?style=flat-square" alt="GitHub Downloads">
+  <a href="https://github.com/ApaceProject/Apace-Launcher/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/ApaceProject/Apace-Launcher/build.yml?style=flat-square" alt="Build APK"></a>
   <a href="https://discord.gg/5K8HJukMSX"><img src="https://img.shields.io/badge/Discord-join_us-5865F2?logo=discord&logoColor=white&style=flat-square" alt="Discord"></a>
 </p>
 
 # Apace Launcher
 
-**Run the [Apace](https://github.com/KotPasztet/Apace) Minecraft server control panel entirely on your phone.** The app installs an Ubuntu ARM64 rootfs under PRoot, adds OpenJDK 17, ASP.NET Core Runtime 10 and Apace, then shows the original web panel in a full-screen immersive WebView at `http://127.0.0.1:5000`. No Termux, no Docker, no root.
+**Run the [Apace](https://github.com/ApaceProject/Apace) Minecraft server control panel entirely on your phone.** The app installs an Ubuntu ARM64 rootfs under PRoot, adds OpenJDK 17, ASP.NET Core Runtime 10 and Apace, then shows the original web panel in a full-screen immersive WebView at `http://127.0.0.1:5000`. No Termux, no Docker, no root.
 
 > [!NOTE]
 > **Requirements:** ARM64 phone (`arm64-v8a`) · Android 8.0+ · ~3 GB first-install download · ~3.5 GB free space.
 
 > [!TIP]
 > ### 📦 Download
-> - **[Actions → Build APK](https://github.com/KotPasztet/apace-launcher/actions/workflows/build.yml)** — the latest run's **artifact `ApaceLauncher`** contains the APK (GitHub wraps it in a zip — unzip and install)
-> - **[Actions → Release APK](https://github.com/KotPasztet/apace-launcher/actions/workflows/release.yml)** — manual workflow: run it with a tag (e.g. `v1.1.0`) to publish a proper [Release](https://github.com/KotPasztet/apace-launcher/releases) with the `.apk` attached
+> - **[Actions → Build APK](https://github.com/ApaceProject/Apace-Launcher/actions/workflows/build.yml)** — the latest run's **artifact `ApaceLauncher`** contains the APK (GitHub wraps it in a zip — unzip and install)
+> - **[Actions → Release APK](https://github.com/ApaceProject/Apace-Launcher/actions/workflows/release.yml)** — manual workflow: run it with a tag (e.g. `v1.1.0`) to publish a proper [Release](https://github.com/ApaceProject/Apace-Launcher/releases) with the `.apk` attached
 >
 > The APK is signed with the same key on every build, so it installs over an older version as a normal update.
 
@@ -28,7 +28,7 @@
 
 | Step | What happens |
 |---|---|
-| First run | Pick the channel: **Main** (stable, Apace GitHub Releases) or **Dev** (the latest dev build, pulled anonymously from the OCI image `ghcr.io/kotpasztet/apace:dev` — the same image `docker-compose.dev.yml` uses; the **full image filesystem** is applied: system layers become the rootfs (Ubuntu 24.04 + Java 17 + .NET 10 + aapt2/zipalign + android-framework), the `/app` layers become the program files; ~600 MB, layers cached so later dev updates download only what changed) |
+| First run | Pick the channel: **Main** (stable, Apace GitHub Releases) or **Dev** (the latest dev build, pulled anonymously from the OCI image `ghcr.io/apaceproject/apace:dev` — the same image `docker-compose.dev.yml` uses; the **full image filesystem** is applied: system layers become the rootfs (Ubuntu 24.04 + Java 17 + .NET 10 + aapt2/zipalign + android-framework), the `/app` layers become the program files; ~600 MB, layers cached so later dev updates download only what changed) |
 | Install | 10 stages: PRoot → environment (**Dev**: the image filesystem — Ubuntu 24.04 + Java 17 + .NET 10 + aapt2/zipalign + android-framework; **Main**: Ubuntu ARM64 + apt + Java 17 + .NET 10) → Apace → smoke test, with a live console |
 | Daily use | The server **auto-starts** when you open the app ("Apace loading…" spinner), then the panel fills the whole screen. When the app is not open for 5 minutes and the game server is off, the server **auto-stops** to save battery (notification says "battery saving") **and the app closes itself** (removed from Recents — reopening the app starts the server again; a manual Stop never closes the app) |
 | In the panel | Android **Back** opens the app menu: Stop / Console / Backup / Restore / Update / Settings / Licenses |
@@ -48,7 +48,7 @@ bash scripts/build_apk.sh
 
 ## Links
 
-- **Apace server:** [github.com/KotPasztet/Apace](https://github.com/KotPasztet/Apace)
+- **Apace server:** [github.com/ApaceProject/Apace](https://github.com/ApaceProject/Apace)
 - **Discord:** [discord.gg/5K8HJukMSX](https://discord.gg/5K8HJukMSX)
 - Docs: [INSTALL.md](apacemobile/docs/INSTALL.md) · [BUILD.md](apacemobile/docs/BUILD.md)
 

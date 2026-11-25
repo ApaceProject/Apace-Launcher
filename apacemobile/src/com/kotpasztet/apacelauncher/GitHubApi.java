@@ -10,7 +10,7 @@ import java.util.List;
 /**
  * Klient GitHub REST API (releases) i ghcr.io (OCI) — bez bibliotek zewnętrznych.
  * Używany do sprawdzania i pobierania aktualizacji Apace (kanał Main = GitHub
- * Releases, kanał Dev = obraz ghcr.io/kotpasztet/apace:dev).
+ * Releases, kanał Dev = obraz ghcr.io/apaceproject/apace:dev).
  *
  * Dev (od 1.1.8): obraz jest czytany w całości — lista WSZYSTKICH warstw z
  * manifestu arm64 klasyfikowana po historii budowania (config.history) na:
@@ -31,11 +31,11 @@ import java.util.List;
  */
 public final class GitHubApi {
 
-    public static final String REPO = "KotPasztet/Apace";
+    public static final String REPO = "ApaceProject/Apace";
 
-    // ── Kanał Dev: obraz ghcr.io/kotpasztet/apace:dev ──────────────────────
+    // ── Kanał Dev: obraz ghcr.io/apaceproject/apace:dev ───────────────────
     // Publikowany przez workflow docker-image-dev.yml przy każdym pushu do dev.
-    public static final String GHCR_IMAGE = "kotpasztet/apace";
+    public static final String GHCR_IMAGE = "apaceproject/apace";
     public static final String GHCR_TAG = "dev";
 
     public static class Asset {
@@ -212,7 +212,8 @@ public final class GitHubApi {
             }
         }
         if (armDigest == null) {
-            throw new Exception("ghcr.io/kotpasztet/apace:dev has no linux/arm64 manifest");
+            throw new Exception("ghcr.io/" + GHCR_IMAGE + ":" + GHCR_TAG
+                    + " has no linux/arm64 manifest");
         }
         JSONObject man = new JSONObject(ghcrGet(tok,
                 "https://ghcr.io/v2/" + GHCR_IMAGE + "/manifests/" + armDigest,

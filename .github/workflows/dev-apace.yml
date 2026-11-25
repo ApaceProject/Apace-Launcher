@@ -13,7 +13,7 @@ jobs:
       - name: Checkout Apace (dev branch)
         uses: actions/checkout@v4
         with:
-          repository: KotPasztet/Apace
+          repository: ApaceProject/Apace
           ref: dev
           submodules: recursive
           fetch-depth: 0

@@ -15,7 +15,7 @@ import java.io.OutputStream;
  * Etap 3 specyfikacji: instalator Apace wewnątrz aplikacji.
  * Kolejne etapy (zgodnie z tabelą ze specyfikacji):
  *  1. ARM64  2. miejsce na dysku  3. PRoot (assets)
- *  4–8. Środowisko: kanał Dev = pełny filesystem obrazu ghcr.io/kotpasztet/apace:dev
+ *  4–8. Środowisko: kanał Dev = pełny filesystem obrazu ghcr.io/apaceproject/apace:dev
  *       (Ubuntu 24.04 + Java 17 + .NET 10 + aapt2/zipalign + android-framework,
  *       warstwy systemowe rozpakowane do rootfs — jak w dockerze); kanał Main =
  *       Ubuntu ARM64 + apt (z aapt/zipalign jak install-termux.sh) + Java 17
@@ -115,16 +115,16 @@ public final class InstallerEngine {
         String tag = null; String assetName = null; String assetUrl = null;
         String revision = null; String rootfsKey = null;
         if ("dev".equals(channel)) {
-            // Dev: instalujemy SYSTEMOWĄ część obrazu ghcr.io/kotpasztet/apace:dev
+            // Dev: instalujemy SYSTEMOWĄ część obrazu ghcr.io/apaceproject/apace:dev
             // jako rootfs (Ubuntu 24.04 + Java 17 + .NET 10 + aapt2/zipalign +
             // android-framework + PowerShell — dokładnie to, co ma obraz dockera)
             // oraz APLIKACYJNĄ część („/app”) jako pliki programu Apace.
             GitHubApi.DevBuild dev;
-            stage(4, "Resolving ghcr.io/kotpasztet/apace:dev");
+            stage(4, "Resolving ghcr.io/apaceproject/apace:dev");
             try {
                 dev = GitHubApi.latestDevBuild();
             } catch (Exception e) {
-                throw new Exception("ghcr.io/kotpasztet/apace:dev: " + e.getMessage(), e);
+                throw new Exception("ghcr.io/apaceproject/apace:dev: " + e.getMessage(), e);
             }
             cb.detail("image commit " + dev.version
                     + (dev.revision != null ? " (" + dev.revision + ")" : "")
@@ -163,7 +163,7 @@ public final class InstallerEngine {
                 public void note(String line) { cb.detail(line); }
             });
             tag = dev.version;
-            assetName = "ghcr.io/kotpasztet/apace:dev";
+            assetName = "ghcr.io/apaceproject/apace:dev";
             assetUrl = "ghcr-image:" + dev.appKey;
             revision = dev.revision;
             rootfsKey = dev.systemKey;
