@@ -333,6 +333,16 @@ public final class GitHubApi {
         java.net.HttpURLConnection c = Downloader.open(
                 "https://ghcr.io/token?scope=repository:" + GHCR_IMAGE + ":pull");
         int code = c.getResponseCode();
+        if (code == 401 || code == 403) {
+            // ghcr.io odmawia anonimowego tokenu (401/403), gdy pakiet kontenera
+            // jest PRYWATNY lub nie istnieje — klient nie może tego obejść; jedyną
+            // naprawą jest ustawienie widoczności pakietu na Public.
+            // 1. linia musi się zmieścić w 120 znakach (firstLine() w MainActivity).
+            throw new Exception("GHCR token: HTTP " + code + " — ghcr.io/"
+                    + GHCR_IMAGE + ":" + GHCR_TAG + " is private or missing; server admin"
+                    + " must make the package public\n"
+                    + "(GitHub → org → Packages → apace → Package settings → Change visibility)");
+        }
         if (code != 200) throw new Exception("GHCR token: HTTP " + code);
         return new JSONObject(readAll(c.getInputStream())).getString("token");
     }
