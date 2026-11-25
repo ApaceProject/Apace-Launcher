@@ -796,27 +796,7 @@ public class MainActivity extends Activity {
             });
             webView.setDownloadListener(new DownloadListener() {
                 public void onDownloadStart(String url, String ua, String cd, String mime, long len) {
-                    String name = "apace-download-" + System.currentTimeMillis() + ".bin";
-                    if (cd != null && cd.contains("filename=")) {
-                        int a = cd.indexOf("filename=") + 9;
-                        name = cd.substring(a).replace("\"", "").replace(";", "").trim();
-                    }
-                    try {
-                        android.app.DownloadManager dm = (android.app.DownloadManager)
-                                getSystemService(DOWNLOAD_SERVICE);
-                        android.app.DownloadManager.Request rq =
-                                new android.app.DownloadManager.Request(Uri.parse(url));
-                        rq.setDestinationInExternalFilesDir(MainActivity.this,
-                                android.os.Environment.DIRECTORY_DOWNLOADS, name);
-                        rq.setNotificationVisibility(android.app.DownloadManager.Request
-                                .VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-                        dm.enqueue(rq);
-                        Toast.makeText(MainActivity.this,
-                                "Downloading: " + name, Toast.LENGTH_LONG).show();
-                    } catch (Exception e) {
-                        Toast.makeText(MainActivity.this, "Download failed: " + e.getMessage(),
-                                Toast.LENGTH_LONG).show();
-                    }
+                    startPanelDownload(url, ua, cd, mime);
                 }
             });
         }
@@ -831,6 +811,164 @@ public class MainActivity extends Activity {
         }
         pendingWebState = null;
         webLoaded = true;
+    }
+
+    // ── Download z panelu (zpatchowany klient MCE z patchera itp.) ────────
+
+    /**
+     * Download z panelu WebView. Dwa tory:
+     *
+     * 1. Przekazanie URL do zewnętrznej przeglądarki (Chrome itp.) przez
+     *    ACTION_VIEW — linki downloadu patchera są PODPISANE tokenem w samym
+     *    URL-u (PatcherDownloadTokens po stronie serwera), więc przeglądarka
+     *    pobiera plik bez cookie sesji panelu. Android prowadzi wtedy swój
+     *    systemowy download (powiadomienie z progresem), a tapnięcie
+     *    ukończonego pliku otwiera systemowe menu „co zrobić z plikiem”
+     *    (dla .apk: instalator pakietów).
+     *
+     * 2. Awaryjnie (brak jakiejkolwiek przeglądarki): systemowy DownloadManager
+     *    z przekazanym cookie sesji WebView (stare, niepodpisane URL-e też
+     *    przejdą autoryzację) i poprawnym MIME — plik ląduje w publicznym
+     *    katalogu Download, tapnięcie powiadomienia otwiera chooser. Gdy
+     *    publiczny katalog nie jest dostępny (brak zgody storage na starym
+     *    Androidzie), ostatnią deską ratunku jest katalog prywatny aplikacji
+     *    (jak dotychczas) — download zawsze kończy się plikiem na dysku.
+     */
+    private void startPanelDownload(String url, String ua, String cd, String mime) {
+        final String name = downloadFileName(cd, url, mime);
+        if (url != null && (url.startsWith("http://") || url.startsWith("https://"))) {
+            try {
+                Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(i);
+                Toast.makeText(MainActivity.this,
+                        "Download opened in your browser: " + name, Toast.LENGTH_LONG).show();
+                return;
+            } catch (Exception e) {
+                // brak przeglądarki na urządzeniu — DownloadManager poniżej
+            }
+        }
+        try {
+            android.app.DownloadManager dm = (android.app.DownloadManager)
+                    getSystemService(DOWNLOAD_SERVICE);
+            android.app.DownloadManager.Request rq = buildDownloadRequest(url, ua, mime);
+            rq.setDestinationInExternalPublicDir(
+                    android.os.Environment.DIRECTORY_DOWNLOADS, name);
+            dm.enqueue(rq);
+            Toast.makeText(MainActivity.this,
+                    "Downloading: " + name + " (Download folder)", Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            // publiczny Download niedostępny (storage/permission) — katalog
+            // prywatny aplikacji zawsze działa; toast pokazuje gdzie plik jest
+            try {
+                android.app.DownloadManager dm = (android.app.DownloadManager)
+                        getSystemService(DOWNLOAD_SERVICE);
+                android.app.DownloadManager.Request rq = buildDownloadRequest(url, ua, mime);
+                rq.setDestinationInExternalFilesDir(MainActivity.this,
+                        android.os.Environment.DIRECTORY_DOWNLOADS, name);
+                dm.enqueue(rq);
+                Toast.makeText(MainActivity.this,
+                        "Downloading: " + name + " (app private folder: "
+                                + "Android/data/" + getPackageName() + "/files/Download)",
+                        Toast.LENGTH_LONG).show();
+            } catch (Exception e2) {
+                Toast.makeText(MainActivity.this,
+                        "Download failed: " + e2.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    /** Request DownloadManagera: cookie sesji WebView (autoryzacja starych,
+     *  niepodpisanych URL-i) + User-Agent + MIME z odpowiedzi serwera. */
+    private android.app.DownloadManager.Request buildDownloadRequest(String url, String ua, String mime) {
+        android.app.DownloadManager.Request rq =
+                new android.app.DownloadManager.Request(Uri.parse(url));
+        if (ua != null && ua.length() > 0) rq.addRequestHeader("User-Agent", ua);
+        try {
+            String cookies = CookieManager.getInstance().getCookie(url);
+            if (cookies != null && cookies.length() > 0) rq.addRequestHeader("Cookie", cookies);
+        } catch (Exception ignore) {}
+        if (mime != null && mime.length() > 0
+                && !"application/octet-stream".equals(mime)) {
+            rq.setMimeType(mime); // np. apk → tapnięcie powiadomienia otwiera instalator
+        }
+        rq.setNotificationVisibility(android.app.DownloadManager.Request
+                .VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+        return rq;
+    }
+
+    /**
+     * Nazwa pliku z Content-Disposition (RFC 6266: „filename*=UTF-8''…”
+     * ma pierwszeństwo przed „filename=…”), potem ostatni segment URL-a,
+     * na końcu znacznik czasu + rozszerzenie z MIME. Poprzedni parser
+     * urywał nazwę na średniku i doklejał resztę nagłówka („apace.apk
+     * filename*=utf-8''apace.apk”) albo generował „…timestamp.bin”.
+     */
+    private static String downloadFileName(String cd, String url, String mime) {
+        if (cd != null) {
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("filename\\*=\\s*UTF-8''([^;]+)",
+                            java.util.regex.Pattern.CASE_INSENSITIVE)
+                    .matcher(cd);
+            if (m.find()) {
+                String n = pctDecode(m.group(1).trim());
+                if (n.length() > 0) return cleanFileName(n);
+            }
+            m = java.util.regex.Pattern
+                    .compile("filename=\\s*\"([^\"]*)\"",
+                            java.util.regex.Pattern.CASE_INSENSITIVE)
+                    .matcher(cd);
+            if (m.find()) {
+                String n = m.group(1).trim();
+                if (n.length() > 0) return cleanFileName(n);
+            }
+            m = java.util.regex.Pattern
+                    .compile("filename=\\s*([^;\"]+)",
+                            java.util.regex.Pattern.CASE_INSENSITIVE)
+                    .matcher(cd);
+            if (m.find()) {
+                String n = m.group(1).trim();
+                if (n.length() > 0) return cleanFileName(n);
+            }
+        }
+        if (url != null) {
+            String u = url;
+            int q = u.indexOf('?');
+            if (q >= 0) u = u.substring(0, q);
+            int s = u.lastIndexOf('/');
+            if (s >= 0 && s + 1 < u.length()) {
+                String seg = u.substring(s + 1);
+                // tylko segment wyglądający na nazwę pliku (z kropką) — segmenty
+                // typu token/id (trasa /dl/{job}/{expiry}/{token}) są bez sensu
+                // jako nazwa; wtedy spada do znacznika czasu + rozszerzenie z MIME
+                if (seg.indexOf('.') >= 0) return cleanFileName(seg);
+            }
+        }
+        String ext = ".bin";
+        if ("application/vnd.android.package-archive".equals(mime)) ext = ".apk";
+        else if (mime != null && mime.toLowerCase(java.util.Locale.ROOT).contains("zip")) ext = ".zip";
+        return "apace-download-" + System.currentTimeMillis() + ext;
+    }
+
+    /**
+     * Bezpieczna nazwa pliku: bez separatorów ścieżek i null-bajtów
+     * (Content-Disposition kontroluje serwer — jak w tar-slip), bez
+     * nazw katalogowych („.”/„..”), maks. ~120 znaków.
+     */
+    private static String cleanFileName(String n) {
+        n = n.replace("/", "_").replace("\\", "_").replace("\u0000", "").trim();
+        if (n.length() == 0 || ".".equals(n) || "..".equals(n)) n = "download";
+        if (n.length() > 120) n = n.substring(n.length() - 120);
+        return n;
+    }
+
+    /** percent-decode bez zamiany „+” na spację (RFC 5987 koduje wyłącznie %-escape'y). */
+    private static String pctDecode(String s) {
+        try {
+            return java.net.URLDecoder.decode(s.replace("+", "%2B"), "UTF-8");
+        } catch (Exception e) {
+            return s;
+        }
     }
 
     private boolean isLocalPanel(String url) {
