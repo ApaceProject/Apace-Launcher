@@ -341,6 +341,9 @@ public final class InstallerEngine {
                 "export COMPlus_gcConcurrent=1\n" +
                 "export DOTNET_GCHeapHardLimit=\"${APACE_GC_HARD_LIMIT:-536870912}\"\n" +
                 "export DOTNET_CLI_TELEMETRY_OPTOUT=1\n" +
+                // marker dla panelu Apace — wykrycie środowiska mobilnego
+                // (np. domyślny adres IPv4 = 127.0.0.1 zamiast LAN IP, bo klient chodzi na tym samym telefonie)
+                "export APACE_MOBILE=1\n" +
                 "# .NET: dev-image rootfs ma /usr/share/dotnet (+/usr/bin/dotnet),\n" +
                 "# Main-channel rootfs — /opt/dotnet\n" +
                 "if [ -d /usr/share/dotnet ]; then\n" +
