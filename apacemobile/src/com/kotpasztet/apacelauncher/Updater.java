@@ -301,8 +301,11 @@ public final class Updater {
 
         // 1c. Czy rootfs trzeba przebudować?
         String installedRootfsKey = InstallerEngine.readMarkerString(paths, "rootfsKey");
-        boolean rootfsBroken = !new File(paths.ubuntu, "usr/bin/java").isFile()
-                && !new File(paths.ubuntu, "usr/bin/dotnet").isFile();
+        // lstat (Paths.runtimePresent), nie isFile(): /usr/bin/java i
+        // /usr/bin/dotnet w rootfs dev-image to symlinki z ABSOLUTNYMI celami,
+        // które poza PRoot wyglądają na zerwane — isFile() kazałoby przebudować
+        // zdrowy rootfs przy KAŻDEJ aktualizacji dev (rootfsKey nigdy nie działa).
+        boolean rootfsBroken = !Paths.runtimePresent(paths.ubuntu);
         boolean rebuild = rootfsBroken || installedRootfsKey == null
                 || !installedRootfsKey.equals(img.systemKey);
 
@@ -459,12 +462,12 @@ public final class Updater {
      * staged) katalog ubuntu może być pusty/niekompletny — przywróć backup.
      */
     private void recoverStagedRootfsIfNeeded() {
-        if (new File(paths.ubuntu, "usr/bin/env").isFile()) return; // rootfs wygląda na cały
+        if (Paths.entryExists(new File(paths.ubuntu, "usr/bin/env"))) return; // rootfs wygląda na cały
         File[] kids = paths.staged.listFiles();
         if (kids == null) return;
         for (File k : kids) {
             if (k.isDirectory() && k.getName().startsWith("pre-update-rootfs-")
-                    && new File(k, "usr/bin/env").isFile()) {
+                    && Paths.entryExists(new File(k, "usr/bin/env"))) {
                 Paths.rmRf(paths.ubuntu);
                 if (k.renameTo(paths.ubuntu)) {
                     if (sink != null) sink.onLine("[update] recovered the rootfs from an interrupted update: " + k.getName());

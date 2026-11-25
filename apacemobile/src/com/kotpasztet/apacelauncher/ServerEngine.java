@@ -51,8 +51,15 @@ public final class ServerEngine {
         if (!paths.prootBin().isFile()) {
             throw new Exception("PRoot is not installed.");
         }
-        if (!new File(paths.ubuntu, "usr/bin/java").isFile()
-                && !new File(paths.ubuntu, "opt/dotnet/dotnet").isFile()) {
+        // FIX „The environment is incomplete” przy zdrowym dev-image: /usr/bin/java
+        // i /usr/bin/dotnet w rootfs z obrazu dockera to SYMLINKI z absolutnymi
+        // celami (Debian alternatives / /usr/share/dotnet). Poza PRoot Android
+        // rozwija je względem swojego „/”, więc isFile()/exists() dają false,
+        // mimo że smoke test w PRoot przechodzi. Obecność sprawdzamy lstatem
+        // (Paths.runtimePresent), ze wszystkimi układami: dev-image
+        // (usr/bin/java, usr/bin/dotnet, usr/share/dotnet/dotnet) i Main
+        // (usr/bin/java, opt/dotnet/dotnet).
+        if (!Paths.runtimePresent(paths.ubuntu)) {
             throw new Exception("The environment is incomplete — reinstall it.");
         }
     }

@@ -39,6 +39,45 @@ public final class Paths {
     public File prootLoader() { return new File(prootDir, "loader"); }
     public File prootLoader32() { return new File(prootDir, "loader32"); }
 
+    // ── Rootfs: sprawdzanie wpisów BEZ podążania za symlinkami ───────────
+
+    /**
+     * Czy wpis o tej ścieżce istnieje w wyekstrahowanym rootfs — lstat, BEZ
+     * podążania za symlinkami. Warstwy obrazu dockera zawierają symlinki z
+     * ABSOLUTNYMI celami (usr/bin/java → /etc/alternatives/java →
+     * /usr/lib/jvm/…, usr/bin/dotnet → /usr/share/dotnet/dotnet). Poza PRoot
+     * Android rozwija je względem swojego korzenia „/”, nie katalogu rootfs,
+     * więc File.isFile() i File.exists() zwracają false dla w pełni sprawnego
+     * środowiska dev-image — stąd lstat (patrz fix „The environment is
+     * incomplete” przy działającym smoke teście).
+     */
+    public static boolean entryExists(File f) {
+        if (f == null) return false;
+        try {
+            android.system.Os.lstat(f.getAbsolutePath());
+            return true;
+        } catch (Throwable e) {
+            return false; // ENOENT — wpisu nie ma (albo brak android.system w testach JVM)
+        }
+    }
+
+    /**
+     * Czy w rootfs jest któreś ze środowisk uruchomieniowych Apace (Java 17
+     * dla Fabric / .NET 10 dla Launchera i ApiServer), w dowolnym układzie:
+     *  - obraz dev: usr/bin/java (symlink apt), usr/bin/dotnet (symlink),
+     *    usr/share/dotnet/dotnet (plik z aspnet:10.0),
+     *  - kanał Main: usr/bin/java (symlink apt), opt/dotnet/dotnet (plik
+     *    z tarballa aspnetcore-runtime).
+     * Kolejność bez znaczenia (OR) — to zgrubny test „czy rootfs w ogóle
+     * rozpakowany”, nie walidacja pojedynczego runtime'u.
+     */
+    public static boolean runtimePresent(File ubuntuRoot) {
+        return entryExists(new File(ubuntuRoot, "usr/bin/java"))
+                || entryExists(new File(ubuntuRoot, "usr/bin/dotnet"))
+                || entryExists(new File(ubuntuRoot, "usr/share/dotnet/dotnet"))
+                || entryExists(new File(ubuntuRoot, "opt/dotnet/dotnet"));
+    }
+
     public boolean isInstalled() {
         return new File(current, ".apacemobile-version.json").isFile()
                 && new File(current, "launcher").isDirectory();
