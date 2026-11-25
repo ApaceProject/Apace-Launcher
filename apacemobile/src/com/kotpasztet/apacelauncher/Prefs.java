@@ -69,6 +69,14 @@ public final class Prefs {
     public String appUpdateUrl() { return sp.getString("app_update_url", ""); }
     public void appUpdateUrl(String v) { sp.edit().putString("app_update_url", v).apply(); }
 
+    /**
+     * Wersja Apace, o którą apka już pokazała prompt update'u (live check
+     * z onStart → tryShowUpdatePrompt). Prompt pojawia się RAZ na nową wersję
+     * (nie przy każdym otwarciu apki) — „Later” wycisza ją do następnej.
+     */
+    public String lastPromptedVersion() { return sp.getString("last_prompted_version", ""); }
+    public void lastPromptedVersion(String v) { sp.edit().putString("last_prompted_version", v).apply(); }
+
     public static int clampPort(int v, int def) {
         if (v < 1024 || v > 65535) return def;
         return v;

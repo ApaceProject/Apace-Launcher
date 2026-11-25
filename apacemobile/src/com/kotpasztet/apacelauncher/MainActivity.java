@@ -82,8 +82,11 @@ public class MainActivity extends Activity {
     private ValueCallback<Uri[]> fileChooserCallback;
     private Updater.CheckResult lastCheck;
     private long lastCheckAt = 0;                 // kiedy wykonano ostatni check (ms)
-    private boolean updateChecking = false;    // tło-check raz na sesję ekranu Start
+    private boolean updateChecking = false;    // jakiś check update'u właśnie leci (dialog/Start/onStart)
     private TextView updStatus;               // stan sprawdzenia na ekranie Start (nigdy „cicho”)
+    // Live check z onStart() skończony — czeka prompt o update; pokaże go
+    // tryShowUpdatePrompt(), gdy stan serwera będzie „promptowalny”.
+    private boolean updatePromptPending = false;
     // Dialog aktualizacji otwarty w trakcie checku — pomaluj wynik, gdy check skończy się
     private TextView pendingResult;
     private Button pendingApply;
@@ -145,6 +148,16 @@ public class MainActivity extends Activity {
             svc(ApaceService.ACTION_START);
         } else {
             showState();
+        }
+        // Live check przy KAŻDYM otwarciu apki: ekran Start (z przyciskiem
+        // „Update available”) jest przy auto-starcie serwera nieosiągalny,
+        // więc o nowej wersji musi informować prompt, nie ekran. Wynik
+        // obsłuży tryShowUpdatePrompt() — jednorazowo, raz na nową wersję.
+        if (paths.isInstalled()
+                && s != ApaceService.State.INSTALLING && s != ApaceService.State.UPDATING
+                && !updateChecking) {
+            updatePromptPending = true;
+            performUpdateCheck(null, null, true);
         }
     }
 
@@ -609,6 +622,10 @@ public class MainActivity extends Activity {
 
     private void showState() {
         ApaceService.State s = ApaceService.state();
+        // Prompt po wolnym checku z onStart(): stan wylądował dopiero teraz
+        // w punkcie, w którym można pytać (np. STARTING → RUNNING/STOPPED/
+        // ERROR) — pokaż go tutaj, bo w ui.post checku był jeszcze za wcześnie.
+        if (updatePromptPending && lastCheck != null) tryShowUpdatePrompt(lastCheck);
         content.removeAllViews();
         progBox = null;
         logView = null;
@@ -1142,9 +1159,12 @@ public class MainActivity extends Activity {
 
     /**
      * Wspólny check update'u: przycisk w dialogu (na żywo), auto po otwarciu
-     * dialogu, auto na ekranie Start (z cache 4 min). Wynik jest ZAWSZE
-     * widoczny: przycisk „Update available”, linia stanu albo błąd z retry.
-     * Gdy CI jeszcze nie zbudował HEAD dev — automatyczny re-check co 3 min.
+     * dialogu, auto na ekranie Start (z cache 4 min) oraz LIVE przy każdym
+     * otwarciu apki (onStart → tryShowUpdatePrompt — jednorazowy prompt
+     * o nowej wersji, bo ekran Start bywa nieosiągalny przy auto-starcie).
+     * Wynik jest ZAWSZE widoczny: prompt, przycisk „Update available”,
+     * linia stanu albo błąd z retry. Gdy CI jeszcze nie zbudował HEAD dev —
+     * automatyczny re-check co 3 min.
      *
      * Check w locie? Dialog, który właśnie otwarto, dopisuje się do kolejki
      * (pendingResult) — wbrew starszej wersji NIE zostaje na „Checking…”.
@@ -1181,6 +1201,9 @@ public class MainActivity extends Activity {
                 }
                 lastCheck = r;
                 lastCheckAt = System.currentTimeMillis();
+                // live check z onStart() skończony — jednorazowy prompt o nowej
+                // wersji (jeśli stan serwera pozwala; inaczej showState() ponowi)
+                if (updatePromptPending) tryShowUpdatePrompt(r);
                 if (result != null) {
                     result.setText((r.message != null ? r.message + "\n" : "")
                             + "Latest: " + r.latest + "  →  " + checkStateLine(r));
@@ -1210,6 +1233,49 @@ public class MainActivity extends Activity {
                 }
             }});
         }}.start();
+    }
+
+    /**
+     * Jednorazowy prompt o update (raz na NOWĄ wersję — prefs.lastPromptedVersion).
+     * Odpalany po live-checku z onStart(): bezpośrednio z ui.post w
+     * performUpdateCheck albo z showState(), gdy serwer wyszedł dopiero teraz
+     * ze STARTING. Ekran Start z przyciskiem „Update available” jest przy
+     * auto-starcie nieosiągalny, więc wynik checku pokazujemy dialogiem,
+     * niezależnie od tego, co akurat jest na ekranie.
+     *
+     * STARTING → BEZ konsumpcji flagi (showState() ponowi po starcie serwera),
+     * INSTALLING/UPDATING → BEZ konsumpcji (ponowimy przy następnym otwarciu
+     * apki), każdy inny stan konsumuje flagę. Dialog tylko przy dostępnej
+     * nowej wersji, o którą jeszcze nie pytaliśmy — reszta (up to date /
+     * CI pending / błąd) zostaje na ekranie Start i w menu „Update Apace”.
+     */
+    private void tryShowUpdatePrompt(final Updater.CheckResult r) {
+        ApaceService.State s = ApaceService.state();
+        if (s == ApaceService.State.STARTING) return; // showState() ponowi po starcie
+        if (s == ApaceService.State.INSTALLING || s == ApaceService.State.UPDATING) return;
+        updatePromptPending = false;
+        if (r == null || !(r.status == Updater.OK_AVAILABLE
+                && r.assetUrl != null && r.latest != null)) {
+            return; // brak nowej wersji / CI pending / błąd — nie pytamy
+        }
+        if (r.latest.equals(prefs.lastPromptedVersion())) return; // już pytaliśmy o tę wersję
+        if (isFinishing()) return; // zamykana aktywność — zapytamy przy następnym otwarciu
+        prefs.lastPromptedVersion(r.latest);
+        String cur = InstallerEngine.readVersion(paths);
+        new AlertDialog.Builder(this, R.style.ApaceDialog)
+                .setTitle("Apace update")
+                .setMessage("Update available: " + r.latest
+                        + "\nInstalled: " + (cur != null ? cur : "—")
+                        + "\n\nThe server will be stopped and a backup created "
+                        + "(automatic rollback on failure).")
+                .setPositiveButton("Update", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        // ApaceService.beginUpdate sam zatrzyma działający serwer
+                        svcUpdate(r.assetUrl, r.latest, r.sha256);
+                    }
+                })
+                .setNegativeButton("Later", null)
+                .show();
     }
 
     /** Maluje wynik checku na ekranie Start (przycisk „Update available” + linia stanu). */
