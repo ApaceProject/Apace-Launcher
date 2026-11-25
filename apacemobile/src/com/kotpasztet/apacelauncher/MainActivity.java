@@ -63,7 +63,7 @@ public class MainActivity extends Activity {
     private static final int REQ_FILE_CHOOSER = 103;
 
     private static final int CH_MAIN = 0; // prefs "main" — GitHub Releases (stable)
-    private static final int CH_DEV  = 1; // prefs "dev"  — obraz ghcr.io/kotpasztet/apace:dev
+    private static final int CH_DEV  = 1; // prefs "dev"  — obraz ghcr.io/apaceproject/apace:dev
 
     private Paths paths;
     private Prefs prefs;
@@ -257,18 +257,47 @@ public class MainActivity extends Activity {
     /**
      * Auto-close: wywołane przez ApaceService po idle auto-stop — zamyka apkę
      * (finish + usunięcie z Recents) z wątku serwisu, stąd post na main thread.
-     * Aktywność może być wtedy ukryta (STOp) — to celowe: apka ma zniknąć.
+     * Aktywność może być wtedy ukryta (stop) — to celowe: apka ma zniknąć.
+     *
+     * UWAGA: nie wolno polegać wyłącznie na statycznej instancji. Android może
+     * zniszczyć zminimalizowaną aktywność PRZY ŻYCIU procesu (FGS utrzymuje
+     * proces, trim pamięci zabija aktywność) — wtedy instance jest null i
+     * poprzednia wersja po cichu nic nie robiła, a zadanie zostawało na liście
+     * Recents (zgłoszenie: „auto-close nadal nie działa”). Fallback: usuń
+     * zadanie(-a) apki przez ActivityManager.AppTask (API 21+; minSdk 26) —
+     * działa też bez żadnej żywej aktywności.
      */
     static void finishFromService() {
         final MainActivity a = instance;
-        if (a == null) return;
-        a.ui.post(new Runnable() { public void run() {
-            try {
-                a.finishAndRemoveTask();
-            } catch (Throwable t) {
-                try { a.finish(); } catch (Throwable ignore) {}
+        if (a != null && !a.isFinishing() && !a.isDestroyed()) {
+            a.ui.post(new Runnable() { public void run() {
+                if (a.isFinishing() || a.isDestroyed()) return; // re-guard w frame wykonania
+                try {
+                    a.finishAndRemoveTask();
+                } catch (Throwable t) {
+                    try { a.finish(); } catch (Throwable ignore) {}
+                    finishAndRemoveAppTasks();
+                }
+            }});
+        } else {
+            ApaceService.log("[mobile] Auto-close: no live activity — "
+                    + "removing the app task (Recents) from the service");
+            finishAndRemoveAppTasks();
+        }
+    }
+
+    /** Usuwa zadanie(-a) apki z Recents z poziomu serwisu (bez żywej aktywności). */
+    private static void finishAndRemoveAppTasks() {
+        Context c = App.appContext();
+        if (c == null) return;
+        try {
+            android.app.ActivityManager am = (android.app.ActivityManager)
+                    c.getSystemService(Context.ACTIVITY_SERVICE);
+            if (am == null) return;
+            for (android.app.ActivityManager.AppTask t : am.getAppTasks()) {
+                try { t.finishAndRemoveTask(); } catch (Throwable ignore) {}
             }
-        }});
+        } catch (Throwable ignore) {} // best effort — resztki Recents sprzątnie system
     }
 
     @Override

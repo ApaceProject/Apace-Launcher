@@ -12,15 +12,15 @@
 
 Open the app → press **Install Apace**. Confirm. On the first install the app also asks for an **update channel**:
 
-- **Main — stable release (recommended)** — tracks the GitHub Releases of KotPasztet/Apace;
-- **Dev — latest dev build** — pulled anonymously from the OCI image `ghcr.io/kotpasztet/apace:dev` (the same image `docker-compose.dev.yml` uses; published by the *docker-image-dev* workflow on every push to `dev`). The **full image filesystem** is installed: the image's system layers become the rootfs (Ubuntu 24.04 + Java 17 + .NET 10 + `aapt2`/`zipalign` + the Android framework for the patcher), and the `/app` layers become the Apace program files. Version shown = the commit the image was built from. Layers are cached by digest, so later dev updates download only the changed layers. Works out of the box — nothing to configure.
+- **Main — stable release (recommended)** — tracks the GitHub Releases of ApaceProject/Apace;
+- **Dev — latest dev build** — pulled anonymously from the OCI image `ghcr.io/apaceproject/apace:dev` (the same image `docker-compose.dev.yml` uses; published by the *docker-image-dev* workflow on every push to `dev`). The **full image filesystem** is installed: the image's system layers become the rootfs (Ubuntu 24.04 + Java 17 + .NET 10 + `aapt2`/`zipalign` + the Android framework for the patcher), and the `/app` layers become the Apace program files. Version shown = the commit the image was built from. Layers are cached by digest, so later dev updates download only the changed layers. Works out of the box — nothing to configure.
 
 The installer then downloads (~2.5–3 GB in total, first run):
 
 | Step | What | Size |
 |---|---|---|
 | PRoot + libraries | from APK assets (instant) | 0.3 MB |
-| **Dev channel**: full `ghcr.io/kotpasztet/apace:dev` image | system layers (Ubuntu 24.04 + Java 17 + .NET 10 + aapt2/zipalign + android-framework) + `/app` layers | ~600 MB |
+| **Dev channel**: full `ghcr.io/apaceproject/apace:dev` image | system layers (Ubuntu 24.04 + Java 17 + .NET 10 + aapt2/zipalign + android-framework) + `/app` layers | ~600 MB |
 | *(or Main channel)* Ubuntu Base 24.04.5 arm64 | glibc rootfs | ~55 MB |
 | *(Main)* apt: libicu, libstdc++, ca-certificates, curl, unzip, aapt, zipalign | through proot | ~35 MB |
 | *(Main)* OpenJDK 17 JRE | through apt | ~250 MB |
@@ -43,6 +43,7 @@ When the app is **not open for 5 minutes**, the game (Java) server is **off**, a
 
 Notes:
 - the app closing applies **only** to the idle auto-stop — stopping the server manually (notification button, panel) never closes the app;
+- the close reaches the app even when Android has already destroyed the background activity while the service kept running — in that case the launcher removes the task (the Recents entry) through the system ActivityManager, so no stale app window is left behind;
 - a running game server, an open Patcher page or any external client connected over Wi-Fi **prevents** the auto-stop (each skip reason is written to the console log);
 - auto-close can be disabled by advanced users (SharedPreferences `apacemobile`: `auto_close_app=false`).
 
@@ -87,7 +88,7 @@ Android deletes all app data on uninstall — including game worlds and accounts
 Menu **⋮ → Update Apace** (also on the Start screen — an "Update available" button appears automatically, and the check result is always shown as a status line — never silent):
 
 - **Main — stable release (recommended)** — the latest official Apace release (GitHub Releases). "Check for updates" → "Update". The server stops, makes a backup (rollback on error), replaces the program files (data preserved).
-- **Dev — latest dev build** — the newest `ghcr.io/kotpasztet/apace:dev` image (version = the commit the image was built from). "Check for updates" → "Update" — same backup/rollback flow as Main, plus:
+- **Dev — latest dev build** — the newest `ghcr.io/apaceproject/apace:dev` image (version = the commit the image was built from). "Check for updates" → "Update" — same backup/rollback flow as Main, plus:
   - the check compares the **image commit** with the **dev branch HEAD** (GitHub API). If CI has not built the newest commit yet, the dialog says so and the launcher **re-checks automatically every 3 minutes**; a failed check (e.g. GitHub API rate limit) is always shown as an error with a retry — never as a silent "up to date";
   - the update applies the **full image filesystem**: when the image's system layers changed (new base image, new apt packages), the rootfs is rebuilt (with a rollback); when only `/app` changed, just the program files are refreshed — unchanged layers are served from the local digest cache (usually only the `/app` layer is downloaded);
   - user data (`launcher/Data`, `persistent_fabric`, `data`, `logs`, `resourcepacks`, `config.json`, `api_config.json`) and ASP.NET data-protection keys are preserved — sessions survive the update.

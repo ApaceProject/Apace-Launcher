@@ -370,11 +370,17 @@ public class ApaceService extends Service {
                 // auto-stop („battery saving”) zamykamy też apkę — finish + usunięcie
                 // z Recents + stopSelf, żeby proces faktycznie zniknął z pamięci.
                 // Ręczny stop NIGDY nie zamyka apki (użytkownik patrzy w ekran).
+                // try/catch: niezłapany wyjątek w tym wątku zabija cały proces
+                // („app crashed”) — auto-close nigdy nie może przerywać stopu.
                 if ("battery saving".equals(why)) {
                     if (prefs.autoCloseApp()) {
-                        log("[mobile] Auto-close: idle auto-stop — closing the app "
-                                + "(reopen to start the server again)");
-                        MainActivity.finishFromService();
+                        try {
+                            log("[mobile] Auto-close: idle auto-stop — closing the app "
+                                    + "(reopen to start the server again)");
+                            MainActivity.finishFromService();
+                        } catch (Throwable t) {
+                            log("[mobile] Auto-close error: " + t);
+                        }
                         stopSelf();
                     } else {
                         log("[mobile] Auto-close disabled (auto_close_app=false) — "
