@@ -1331,23 +1331,23 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Prompt o update przy otwarciu apki: pokazuje się RAZ na nową wersję
-     * (Prefs.lastPromptedVersion — „Later” wycisza ją do następnej wersji) i
-     * TYLKO gdy webserver jest off (STOPPED/ERROR) — otwarcie apki przy
-     * działającym serwerze nigdy nie wypisuje dialogu (przycisk „Update
-     * available” na ekranie Start zostaje). Odpalany po live-checku z
-     * onStart(): bezpośrednio z ui.post w performUpdateCheck albo z
-     * showState(), gdy serwer wyszedł dopiero teraz ze STARTING. Ekran Start
-     * z przyciskiem „Update available” jest przy auto-starcie nieosiągalny,
-     * więc wynik checku pokazujemy dialogiem, niezależnie od tego, co akurat
-     * jest na ekranie.
+     * Prompt o update przy otwarciu apki: pokazuje się PRZY KAŻDYM otwarciu,
+     * gdy jest nowsza wersja i webserver jest off (STOPPED/ERROR) — bez
+     * gate'u „raz na wersję” (ten blokował prompt przy kolejnych otwarciach,
+     * co miało być bez sensu i było). Otwarcie apki przy działającym serwerze
+     * nigdy nie wypisuje dialogu (przycisk „Update available” na ekranie Start
+     * zostaje). Odpalany po live-checku z onStart(): bezpośrednio z ui.post w
+     * performUpdateCheck albo z showState(), gdy serwer wyszedł dopiero teraz
+     * ze STARTING. Ekran Start z przyciskiem „Update available” jest przy
+     * auto-starcie nieosiągalny, więc wynik checku pokazujemy dialogiem,
+     * niezależnie od tego, co akurat jest na ekranie.
      *
-     * STARTING/STOPPING → BEZ konsumpcji flagi (showState() ponowi; stop w toku
-     * nie może dostać update'u), INSTALLING/UPDATING → BEZ konsumpcji (ponowimy przy następnym otwarciu
-     * apki), każdy inny stan konsumuje flagę. Dialog tylko przy dostępnej
-     * nowej wersji, webserver off, bez aktywnego snooze i bez wcześniejszego
-     * promptu dla tej wersji — reszta (up to date / CI pending / błąd)
-     * zostaje na ekranie Start i w menu „Update Apace”.
+     * STARTING/STOPPING → bez dialogu (showState() ponowi; stop w toku
+     * nie może dostać update'u), INSTALLING/UPDATING → bez dialogu (ponowimy
+     * przy następnym otwarciu apki). Dialog tylko przy dostępnej nowej
+     * wersji, webserver off i bez aktywnego snooze (snooze stawia tylko
+     * świadomy klik „Don't show for 7 days”) — reszta (up to date / CI
+     * pending / błąd) zostaje na ekranie Start i w menu „Update Apace”.
      *
      * W trakcie checku przed startem (auto-start, startPendingAfterCheck)
      * naturalnie wychodzimy — ten flow pokaże dialog sam, w decideStart();
@@ -1366,12 +1366,9 @@ public class MainActivity extends Activity {
         // webserver działa → bez dialogu (prompt tylko przy otwarciu z serwerem
         // off); przycisk „Update available” na ekranie Start zostaje
         if (s != ApaceService.State.STOPPED && s != ApaceService.State.ERROR) return;
-        // prompt dla tej wersji już był — nie pytamy przy każdym otwarciu
-        if (prefs.lastPromptedVersion().equals(r.latest)) return;
         if (prefs.isSnoozed(r.latest)) return; // ta wersja ma aktywne 7-dniowe snooze
         if (isFinishing()) return; // zamykana aktywność — zapytamy przy następnym otwarciu
         String cur = InstallerEngine.readVersion(paths);
-        prefs.lastPromptedVersion(r.latest); // pokazany → jedyny prompt dla tej wersji
         new AlertDialog.Builder(this, R.style.ApaceDialog)
                 .setTitle("Apace update")
                 .setMessage("Update available: " + r.latest
@@ -1427,15 +1424,8 @@ public class MainActivity extends Activity {
             svc(ApaceService.ACTION_START);
             return;
         }
-        // prompt dla tej wersji już był pokazany — nie pytamy przy każdym
-        // otwarciu apki, startujemy od razu (przycisk „Update available” na
-        // ekranie Start nadal pozwala zaktualizować ręcznie)
-        if (avail && prefs.lastPromptedVersion().equals(r.latest)) {
-            consoleLog("[update] Update " + r.latest
-                    + " available — prompt already shown for this version, starting");
-            svc(ApaceService.ACTION_START);
-            return;
-        }
+        // webserver off + nowa wersja → dialog PRZY KAŻDYM otwarciu apki (bez
+        // gate'u „raz na wersję”); „Later” domyka start, „Update” go rozpoczyna
         if (avail) { showPreStartUpdateDialog(r); return; }
         svc(ApaceService.ACTION_START);
     }
@@ -1446,9 +1436,7 @@ public class MainActivity extends Activity {
      * i zrobi backup), „Later”/dismiss poza przyciskiem → zwykły ACTION_START
      * (onDismiss), „Don't show for 7 days” → snooze tej wersji + ACTION_START
      * (onDismiss). Zamykana aktywność → od razu start — proces nigdy nie
-     * utyka na „Checking for updates…” bez odpowiedzi. Pokazany dialog
-     * zapisuje wersję w Prefs.lastPromptedVersion — RAZ na wersję (patrz
-     * tryShowUpdatePrompt).
+     * utyka na „Checking for updates…” bez odpowiedzi.
      */
     private void showPreStartUpdateDialog(final Updater.CheckResult r) {
         if (isFinishing()) { // aktywność się zamyka — start bez dialogu
@@ -1456,7 +1444,6 @@ public class MainActivity extends Activity {
             return;
         }
         String cur = InstallerEngine.readVersion(paths);
-        prefs.lastPromptedVersion(r.latest); // pokazany → jedyny prompt dla tej wersji
         AlertDialog dlg = new AlertDialog.Builder(this, R.style.ApaceDialog)
                 .setTitle("Apace update")
                 .setMessage("Update available: " + r.latest
