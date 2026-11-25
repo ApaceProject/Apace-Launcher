@@ -93,6 +93,9 @@ public class MainActivity extends Activity {
     private boolean startPendingAfterCheck = false;
     private long updateCheckDeadline = 0;         // deadline checku przed startem (epoch ms)
     private boolean preStartUpdateChosen = false; // dialog przed startem: wybrano „Update”
+    // Dialog „Apace update” przed startem — referencja potrzebna, żeby przy
+    // ponownym otwarciu apki zamknąć stary dialog bez wywołania startu.
+    private android.app.AlertDialog preStartDialog;
     // Dialog aktualizacji otwarty w trakcie checku — pomaluj wynik, gdy check skończy się
     private TextView pendingResult;
     private Button pendingApply;
@@ -113,7 +116,7 @@ public class MainActivity extends Activity {
 
     /**
      * Auto-start: poczekalnia na wynik checku update'u PRZED startem serwera
-     * (onStart → ui.postDelayed). Poll co 300 ms; po 8 s (updateCheckDeadline)
+     * (onStart → ui.postDelayed). Poll co 300 ms; po 20 s (updateCheckDeadline)
      * startujemy i tak — dialog nie może blokować startu w nieskończoność.
      * Przy timeout flagę updatePromptPending zostawiamy: późny wynik pokaże
      * prompt przez zwykłą maszynerię (tryShowUpdatePrompt/showState), gdy
@@ -126,7 +129,7 @@ public class MainActivity extends Activity {
                 ui.postDelayed(this, 300); // check jeszcze leci — czekamy dalej
                 return;
             }
-            appendLog("[update] Update check timed out — starting anyway");
+            consoleLog("[update] Update check timed out — starting anyway");
             startPendingAfterCheck = false;
             // updatePromptPending celowo zostaje — późny wynik i tak pokaże prompt
             svc(ApaceService.ACTION_START);
@@ -172,17 +175,27 @@ public class MainActivity extends Activity {
         // Spinner od razu — bez migania guzikiem „Start Apace” (guzik zostaje
         // tylko dla stanu błędu, żeby użytkownik widział komunikat i mógł ponowić).
         // Od 1.1.13: NAJPIERW check update'u — widoczny na konsoli (prośba
-        // użytkownika); start serwera czeka na wynik (max 8 s, checkWaiter →
+        // użytkownika); start serwera czeka na wynik (max 20 s, checkWaiter →
         // decideStart), dopiero potem ACTION_START.
         ApaceService.State s = ApaceService.state();
         if (paths.isInstalled()
                 && (s == ApaceService.State.STOPPED || s == ApaceService.State.ERROR)) {
+            // Stale dialog z poprzedniego otwarcia apki (np. proces zabity
+            // z dialogiem na ekranie) — zamknij go bez startu z onDismiss
+            // (preStartUpdateChosen=true przed dismiss(); niżej wraca false).
+            if (preStartDialog != null) {
+                try { preStartUpdateChosen = true; preStartDialog.dismiss(); } catch (Throwable t) { }
+                preStartDialog = null;
+            }
             // Check update'u PRZED startem serwera — musi być widoczny w logach.
             showBusyNow("Checking for updates…");
-            appendLog("[update] Checking for updates…");
+            consoleLog("[update] Checking for updates…");
             startPendingAfterCheck = true;
             preStartUpdateChosen = false;
-            updateCheckDeadline = System.currentTimeMillis() + 8000;
+            // Deadline 20 s, nie 8 s: dev-check robi 4-5 sekwencyjnych HTTP po
+            // kolei, a connect-timeout to 20 s — 8 s prawie zawsze dawało
+            // „timed out — starting anyway” na wolniejszych sieciach.
+            updateCheckDeadline = System.currentTimeMillis() + 20000;
             if (paths.isInstalled() && s != ApaceService.State.INSTALLING
                     && s != ApaceService.State.UPDATING && !updateChecking) {
                 updatePromptPending = true;
@@ -399,7 +412,7 @@ public class MainActivity extends Activity {
      * (zachowany ogon) + autoscroll na dół. Gdy konsola nie jest na ekranie
      * (np. panel WebView) — linia jest po prostu ignorowana.
      */
-    private void appendLog(String line) {
+    private void paintConsole(String line) {
         if (logView == null) return;
         String s = logView.getText().length() == 0
                 ? line : logView.getText() + "\n" + line;
@@ -410,6 +423,14 @@ public class MainActivity extends Activity {
         logScroll.post(new Runnable() { public void run() {
             logScroll.fullScroll(View.FOCUS_DOWN);
         }});
+    }
+
+    // Linie z MainActivity muszą przeżyć rebuild ekranu — idą do LogRing (jak
+    // linie serwisu) i są dorysowywane do bieżącej konsoli. Bez tego [update]…
+    // znika przy pierwszym showState() (konsola jest re-seedowana z LogRing.dump()).
+    private void consoleLog(String line) {
+        LogRing.add(line);
+        paintConsole(line);
     }
 
 
@@ -1266,6 +1287,11 @@ public class MainActivity extends Activity {
                         pendingResult = null; pendingApply = null;
                         performUpdateCheck(pr, pa, true);
                     }
+                    if (startPendingAfterCheck) {
+                        consoleLog("[update] Channel switched during check — re-checking");
+                        updateCheckDeadline = System.currentTimeMillis() + 20000;
+                        performUpdateCheck(null, null, true);
+                    }
                     return;
                 }
                 lastCheck = r;
@@ -1305,17 +1331,18 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Jednorazowy prompt o update (raz na NOWĄ wersję — prefs.lastPromptedVersion).
+     * Prompt o update przy otwarciu apki: przy nowej wersji pytamy ZAWSZE —
+     * jedynym suppressem jest 7-dniowe snooze („Don't show for 7 days”).
      * Odpalany po live-checku z onStart(): bezpośrednio z ui.post w
      * performUpdateCheck albo z showState(), gdy serwer wyszedł dopiero teraz
      * ze STARTING. Ekran Start z przyciskiem „Update available” jest przy
      * auto-starcie nieosiągalny, więc wynik checku pokazujemy dialogiem,
      * niezależnie od tego, co akurat jest na ekranie.
      *
-     * STARTING → BEZ konsumpcji flagi (showState() ponowi po starcie serwera),
-     * INSTALLING/UPDATING → BEZ konsumpcji (ponowimy przy następnym otwarciu
+     * STARTING/STOPPING → BEZ konsumpcji flagi (showState() ponowi; stop w toku
+     * nie może dostać update'u), INSTALLING/UPDATING → BEZ konsumpcji (ponowimy przy następnym otwarciu
      * apki), każdy inny stan konsumuje flagę. Dialog tylko przy dostępnej
-     * nowej wersji, o którą jeszcze nie pytaliśmy — reszta (up to date /
+     * nowej wersji bez aktywnego snooze — reszta (up to date /
      * CI pending / błąd) zostaje na ekranie Start i w menu „Update Apace”.
      *
      * W trakcie checku przed startem (auto-start, startPendingAfterCheck)
@@ -1325,16 +1352,15 @@ public class MainActivity extends Activity {
     private void tryShowUpdatePrompt(final Updater.CheckResult r) {
         if (startPendingAfterCheck) return; // dialog przed startem pokaże decideStart()
         ApaceService.State s = ApaceService.state();
-        if (s == ApaceService.State.STARTING) return; // showState() ponowi po starcie
+        if (s == ApaceService.State.STARTING || s == ApaceService.State.STOPPING) return; // showState() ponowi
         if (s == ApaceService.State.INSTALLING || s == ApaceService.State.UPDATING) return;
         updatePromptPending = false;
         if (r == null || !(r.status == Updater.OK_AVAILABLE
                 && r.assetUrl != null && r.latest != null)) {
             return; // brak nowej wersji / CI pending / błąd — nie pytamy
         }
-        if (r.latest.equals(prefs.lastPromptedVersion())) return; // już pytaliśmy o tę wersję
+        if (prefs.isSnoozed(r.latest)) return; // ta wersja ma aktywne 7-dniowe snooze
         if (isFinishing()) return; // zamykana aktywność — zapytamy przy następnym otwarciu
-        prefs.lastPromptedVersion(r.latest);
         String cur = InstallerEngine.readVersion(paths);
         new AlertDialog.Builder(this, R.style.ApaceDialog)
                 .setTitle("Apace update")
@@ -1348,6 +1374,13 @@ public class MainActivity extends Activity {
                         svcUpdate(r.assetUrl, r.latest, r.sha256);
                     }
                 })
+                .setNeutralButton("Don't show for 7 days", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        prefs.snooze(r.latest, System.currentTimeMillis() + 7L * 24 * 60 * 60 * 1000);
+                        consoleLog("[update] Update " + r.latest + " hidden until "
+                                + new java.util.Date(prefs.snoozeUntilMs()));
+                    }
+                })
                 .setNegativeButton("Later", null)
                 .show();
     }
@@ -1358,7 +1391,7 @@ public class MainActivity extends Activity {
      * updatePromptPending (tryShowUpdatePrompt jest odgrodzone flagą
      * startPendingAfterCheck, żeby ui.post z checku nie pokazał dialogu drugi
      * raz). Wynik checku trafia do konsoli („[update] …”), potem: nowa wersja
-     * (nieoferowana wcześniej) → dialog przed startem; w każdym innym
+     * (niesnoozowana) → dialog przed startem; w każdym innym
      * przypadku → zwykły start serwera.
      */
     private void decideStart(Updater.CheckResult r) {
@@ -1366,30 +1399,25 @@ public class MainActivity extends Activity {
         updatePromptPending = false; // ten flow sam decyduje o prompcie
         if (r != null) {
             if (r.status == Updater.OK_AVAILABLE) {
-                appendLog("[update] Update available: " + r.latest
+                consoleLog("[update] Update available: " + r.latest
                         + " (installed " + InstallerEngine.readVersion(paths) + ")");
             } else if (r.status == Updater.OK_UPTODATE) {
-                appendLog("[update] Apace is up to date (" + r.latest + ")");
+                consoleLog("[update] Apace is up to date (" + r.latest + ")");
             } else if (r.status == Updater.OK_CI_PENDING) {
-                appendLog("[update] Waiting for CI — image older than dev HEAD ("
+                consoleLog("[update] Waiting for CI — image older than dev HEAD ("
                         + (r.headShort != null ? r.headShort : "newest commit") + ")");
             } else {
-                appendLog("[update] Update check failed: " + firstLine(r.message, 120));
+                consoleLog("[update] Update check failed: " + firstLine(r.message, 120));
             }
         }
         boolean avail = r != null && r.status == Updater.OK_AVAILABLE
                 && r.assetUrl != null && r.latest != null;
-        if (avail && r.latest.equals(prefs.lastPromptedVersion())) {
-            // tę wersję już raz zaoferowano — nie pytamy ponownie, startujemy
-            appendLog("[update] Update " + r.latest + " was already offered — starting");
+        if (avail && prefs.isSnoozed(r.latest)) {
+            consoleLog("[update] Update " + r.latest + " snoozed — starting");
             svc(ApaceService.ACTION_START);
             return;
         }
-        if (avail) {
-            prefs.lastPromptedVersion(r.latest);
-            showPreStartUpdateDialog(r);
-            return;
-        }
+        if (avail) { showPreStartUpdateDialog(r); return; }
         svc(ApaceService.ACTION_START);
     }
 
@@ -1397,6 +1425,7 @@ public class MainActivity extends Activity {
      * Dialog „Update available” PRZED startem serwera (auto-start). KAŻDA
      * ścieżka domyka start: „Update” → svcUpdate (serwis sam zatrzyma serwer
      * i zrobi backup), „Later”/dismiss poza przyciskiem → zwykły ACTION_START
+     * (onDismiss), „Don't show for 7 days” → snooze tej wersji + ACTION_START
      * (onDismiss). Zamykana aktywność → od razu start — proces nigdy nie
      * utyka na „Checking for updates…” bez odpowiedzi.
      */
@@ -1406,7 +1435,7 @@ public class MainActivity extends Activity {
             return;
         }
         String cur = InstallerEngine.readVersion(paths);
-        new AlertDialog.Builder(this, R.style.ApaceDialog)
+        AlertDialog dlg = new AlertDialog.Builder(this, R.style.ApaceDialog)
                 .setTitle("Apace update")
                 .setMessage("Update available: " + r.latest
                         + "\nInstalled: " + (cur != null ? cur : "—")
@@ -1421,13 +1450,23 @@ public class MainActivity extends Activity {
                     }
                 })
                 .setNegativeButton("Later", null) // zwykły dismiss → start w onDismiss
+                .setNeutralButton("Don't show for 7 days", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        prefs.snooze(r.latest, System.currentTimeMillis() + 7L * 24 * 60 * 60 * 1000);
+                        consoleLog("[update] Update " + r.latest + " hidden until "
+                                + new java.util.Date(prefs.snoozeUntilMs()));
+                    }
+                })
                 .setCancelable(true)
                 .setOnDismissListener(new DialogInterface.OnDismissListener() {
                     public void onDismiss(DialogInterface d) {
+                        preStartDialog = null;
                         if (!preStartUpdateChosen) svc(ApaceService.ACTION_START);
                     }
                 })
-                .show();
+                .create();
+        preStartDialog = dlg;
+        dlg.show();
     }
 
     /** Maluje wynik checku na ekranie Start (przycisk „Update available” + linia stanu). */
@@ -1527,7 +1566,8 @@ public class MainActivity extends Activity {
                 }
             } else if (ApaceService.ACTION_LOG.equals(a)) {
                 String line = i.getStringExtra("line");
-                if (line != null) appendLog(line);
+                // Linia jest już w LogRing (dodał ją ApaceService.log) — tylko dorysuj.
+                if (line != null) paintConsole(line);
             }
         }
     };

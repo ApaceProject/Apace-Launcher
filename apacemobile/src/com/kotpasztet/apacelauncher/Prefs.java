@@ -77,6 +77,18 @@ public final class Prefs {
     public String lastPromptedVersion() { return sp.getString("last_prompted_version", ""); }
     public void lastPromptedVersion(String v) { sp.edit().putString("last_prompted_version", v).apply(); }
 
+    // „Don't show for 7 days" w prompcie update'u — per-wersja, suppressuje prompt na 7 dni.
+    public String snoozeVersion() { return sp.getString("update_snooze_version", ""); }
+    public long snoozeUntilMs() { return sp.getLong("update_snooze_until_ms", 0L); }
+    public void snooze(String version, long untilMs) {
+        sp.edit().putString("update_snooze_version", version == null ? "" : version)
+                 .putLong("update_snooze_until_ms", untilMs).apply();
+    }
+    public boolean isSnoozed(String version) {
+        return version != null && version.equals(sp.getString("update_snooze_version", ""))
+                && System.currentTimeMillis() < sp.getLong("update_snooze_until_ms", 0L);
+    }
+
     public static int clampPort(int v, int def) {
         if (v < 1024 || v > 65535) return def;
         return v;

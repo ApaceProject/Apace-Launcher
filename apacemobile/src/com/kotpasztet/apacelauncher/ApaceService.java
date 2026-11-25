@@ -569,6 +569,11 @@ public class ApaceService extends Service {
                 });
                 log("[update] Updated to " + version);
                 finishAsStopped();
+                // Po udanym updatecie startujemy serwer automatycznie — jak po
+                // instalacji (done() w beginInstall: ui.post(beginStart)),
+                // żeby „Update” z promptu przed startem kończył się działającym
+                // serwerem, a nie stanem STOPPED.
+                ui.post(new Runnable() { public void run() { beginStart(); }});
             } catch (final Exception e) {
                 log("[update] ERROR: " + e.getMessage());
                 setStateError(e.getMessage());
