@@ -19,12 +19,32 @@ import java.util.zip.ZipInputStream;
  *    pomijamy launcher/Data/, launcher/logs/, launcher/persistent_fabric/,
  *    data/, logs/ oraz launcher/config.json (jeśli istnieje) — dokładnie te
  *    same wykluczenia stosuje install-termux.sh w repozytorium Apace.
+ *  - Wykluczenia porównujemy CASE-INSENSITIVE (lowercase po obu stronach):
+ *    release'owe zipy Apace v0.2.0–v0.2.3 zawierają zatruty wpis
+ *    "launcher/Data/app.db" (wielkie „D"!) — gotową bazę z istniejącym
+ *    kontem owner. Poprzednia wersja porównywała zlowercase'owaną nazwę
+ *    wpisu z wzorcem "launcher/Data/" i przez różnicę wielkości liter nigdy
+ *    nie łapała tego pliku: panel startował na dowożonej bazie i żadne
+ *    nowo zarejestrowane konto nie dostawało roli owner. Kanał dev (obraz
+ *    OCI) nie ma bazy w zipie i działał poprawnie.
  *  - Zabezpieczenie przed zip-slip ("..").
  */
 public final class ZipExtractor {
 
+    /**
+     * Katalogi danych użytkownika pomijane przy instalacji/aktualizacji
+     * (protectData = true). WZORCE MUSZĄ BYĆ lowercase — patrz isExcluded():
+     * porównanie robi lowercase na nazwie wpisu ORAZ na wzorcach, żeby
+     * różnica wielkości liter (np. "launcher/Data/" z Compress-Archive vs
+     * "launcher/data/") nie przepuszczała zatrutych wpisów.
+     *
+     * launcher/Data/ to dane użytkownika: świeża instalacja sama tworzy bazę
+     * przez migracje EF, a przy aktualizacji baza użytkownika nie może zostać
+     * nadpisana — dlatego NIC z pod launcher/Data/ nie jest wypakowywane,
+     * nawet ze starych zipów release'owych, które mają tam app.db z kontem owner.
+     */
     public static final String[] DATA_EXCLUSIONS = {
-            "launcher/Data/", "launcher/logs/", "launcher/persistent_fabric/",
+            "launcher/data/", "launcher/logs/", "launcher/persistent_fabric/",
             "data/", "logs/"
     };
     private static final String CONFIG_ENTRY = "launcher/config.json";
@@ -88,12 +108,17 @@ public final class ZipExtractor {
 
     private boolean isExcluded(String name) {
         if (!protectData) return false;
-        String low = name.toLowerCase();
+        // Normalizacja OBU stron porównania: separatory "\\" → "/"
+        // (Compress-Archive) + lowercase nazwy wpisu i wzorców. Bez lowercase
+        // wzorców wpis "launcher/Data/app.db" z zatrutych zipów v0.2.0–v0.2.3
+        // przechodził jako zwykły plik i dowoził gotową bazę z kontem owner
+        // (bug: pierwsze zarejestrowane konto nigdy nie dostawało roli owner).
+        String low = name.replace('\\', '/').toLowerCase();
         if (low.equals(CONFIG_ENTRY) && new File(destDir, CONFIG_ENTRY).isFile()) {
             return true; // zachowaj istniejącą konfigurację (ApiPort itd.)
         }
         for (String p : DATA_EXCLUSIONS) {
-            if (low.startsWith(p)) return true;
+            if (low.startsWith(p.toLowerCase())) return true;
         }
         return false;
     }
