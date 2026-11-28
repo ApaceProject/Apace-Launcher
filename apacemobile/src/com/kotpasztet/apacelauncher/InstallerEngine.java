@@ -213,6 +213,29 @@ public final class InstallerEngine {
                 cb.detail("NOTE: aapt/zipalign not installed (" + r1b.tail(3).trim()
                         + ") — the panel patcher will use the apktool-bundled aapt2");
             }
+            // Framework dla apktool (Google android.jar API 29 jako /opt/android-framework/1.apk).
+            // Bez niego patcher pada w kroku link: aapt2 z apktool robi SIGILL na starszych ARM,
+            // a dystrybucyjny aapt2 2.19 odrzuca framework wbudowany w apktool 3
+            // (LoadedArsc.cpp:94 "entry offsets overlap"). Kanał Dev dostaje ten plik razem
+            // z obrazem dockera; tu (kanał Main) trzeba go pobrać — tak samo robi Dockerfile
+            // i install-termux.sh. run-inside.sh ustawi APKTOOL_FRAMEWORK_DIR, gdy katalog istnieje.
+            // Niefatalne: brak nie blokuje instalacji, ale patcher wtedy nie zadziała.
+            PRoot.Result r1c = PRoot.run(PRoot.shellCommand(paths,
+                    "if [ -f /opt/android-framework/1.apk ]; then echo FRAMEWORK_ALREADY_PRESENT; else " +
+                            "rm -rf /opt/android-framework && mkdir -p /opt/android-framework && " +
+                            "if ( curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 3 " +
+                            "-o /tmp/platform-29.zip https://dl.google.com/android/repository/platform-29_r05.zip " +
+                            "&& unzip -j -q /tmp/platform-29.zip android-10/android.jar -d /opt/android-framework " +
+                            "&& mv /opt/android-framework/android.jar /opt/android-framework/1.apk ); then " +
+                            "rm -f /tmp/platform-29.zip && echo FRAMEWORK_OK; " +
+                            "else rm -f /tmp/platform-29.zip && rm -rf /opt/android-framework && echo FRAMEWORK_FAILED; fi; fi"),
+                    paths, sink());
+            if (r1c.out.toString().contains("FRAMEWORK_OK") || r1c.out.toString().contains("FRAMEWORK_ALREADY_PRESENT")) {
+                cb.detail("patcher framework: /opt/android-framework/1.apk ready");
+            } else {
+                cb.detail("WARNING: apktool framework not provisioned (" + r1c.tail(3).trim()
+                        + ") — the panel patcher will FAIL until it is. Reinstall to retry.");
+            }
 
             // ── 7. Java 17 ─────────────────────────────────────────────────────
             stage(7, "Installing Java 17 (openjdk-17-jre-headless)");
